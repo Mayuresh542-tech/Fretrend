@@ -72,14 +72,14 @@ export default function Settings() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.5 }}
-        className="ml-64 flex-1 p-8 relative z-10"
+        className="lg:ml-64 flex-1 p-4 pt-20 lg:p-8 relative z-10"
       >
         <div className="mb-8">
           <motion.h2
             initial={{ opacity: 0, y: -16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            className="text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
+            className="text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
             style={{ backgroundSize: "200% auto" }}
           >
             Settings

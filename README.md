@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
@@ -34,3 +35,39 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+=======
+# Fretrend 🚀
+
+Fretrend is a free AI trend intelligence platform built for 
+content creators. Stop guessing what to create — let AI find 
+what's about to go viral in your niche.
+
+## What Fretrend Does
+
+- 🔥 Finds trending topics across your niche instantly
+- 🤖 Generates complete AI Content Kits per trend
+- ✍️ Writes full video scripts with timing
+- 💡 Suggests viral titles, hooks & thumbnail ideas
+- 📊 Scores each trend's virality from 0-100
+- 💾 Save your favorite trend reports
+
+## Built With
+
+- Next.js 16
+- Supabase
+- Groq AI (free)
+- Google Trends
+- Framer Motion
+- Tailwind CSS
+
+## Getting Started
+
+1. Sign up free at fretrend.vercel.app
+2. Get your free Groq API key at console.groq.com
+3. Add key in Settings
+4. Find your niche trends instantly!
+
+## Status
+
+🚀 Actively building — suggestions welcome!
+>>>>>>> 63dbca62079a565725fe183db278bc557323a046

@@ -123,6 +123,18 @@ export default function Trends() {
     }
   }, []);
 
+  // Record a "Find Trends" click so the dashboard can count searches and
+  // surface the most-searched niche. Fire-and-forget: failures are ignored.
+  async function logSearch(query: string) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      await supabase.from("searches").insert({ user_id: user.id, niche: query });
+    } catch {
+      // best-effort analytics — never surface to the user
+    }
+  }
+
   async function findTrends(forceNiche?: string) {
     const query = (forceNiche ?? niche).trim();
     if (!query) return;
@@ -150,6 +162,9 @@ export default function Trends() {
       setLastFetched(now);
 
       localStorage.setItem(CACHE_KEY, JSON.stringify({ niche: query, trends: results, sources: srcCounts, savedAt: now } satisfies Cache));
+
+      // Log the search for dashboard stats (best-effort — never block results).
+      void logSearch(query);
     } catch (err: any) {
       setError(err.message);
       setAllTrends([]);
@@ -289,7 +304,7 @@ export default function Trends() {
       <AnimatedBackground />
       <Sidebar active="trends" />
 
-      <div className="ml-64 flex-1 p-8 relative z-10">
+      <div className="lg:ml-64 flex-1 p-4 pt-20 lg:p-8 relative z-10">
         <div className="max-w-4xl">
           {/* Header */}
           <motion.div
@@ -299,7 +314,7 @@ export default function Trends() {
             className="mb-8"
           >
             <motion.h2
-              className="text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
+              className="text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
               style={{ backgroundSize: "200% auto" }}
               animate={{ backgroundPosition: ["0% center", "200% center"] }}
               transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
@@ -316,7 +331,7 @@ export default function Trends() {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1, duration: 0.5 }}
-            className="flex gap-3 mb-5"
+            className="flex flex-col sm:flex-row gap-3 mb-5"
           >
             <motion.div
               className="flex-1 rounded-xl"
@@ -343,7 +358,7 @@ export default function Trends() {
               disabled={loading}
               whileHover={{ scale: 1.04, boxShadow: "0 0 26px -6px rgba(124,58,237,0.7)" }}
               whileTap={{ scale: 0.96 }}
-              className="px-6 py-3 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 disabled:opacity-50 whitespace-nowrap"
+              className="w-full sm:w-auto px-6 py-3 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 disabled:opacity-50 whitespace-nowrap"
             >
               {loading ? "Scanning…" : "Find Trends"}
             </motion.button>
@@ -353,7 +368,7 @@ export default function Trends() {
                 whileHover={{ scale: 1.08, rotate: 90 }}
                 whileTap={{ scale: 0.9 }}
                 title="Refresh results"
-                className="px-4 py-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition text-white/60 hover:text-white"
+                className="w-full sm:w-auto px-4 py-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition text-white/60 hover:text-white"
               >
                 ↻
               </motion.button>

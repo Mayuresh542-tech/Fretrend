@@ -131,7 +131,7 @@ export default function HowToUse() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.5 }}
-        className="ml-64 flex-1 p-8 relative z-10"
+        className="lg:ml-64 flex-1 p-4 pt-20 lg:p-8 relative z-10"
       >
         <div className="max-w-3xl mx-auto">
           {/* Header */}
@@ -142,7 +142,7 @@ export default function HowToUse() {
             className="mb-10"
           >
             <motion.h2
-              className="text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
+              className="text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
               style={{ backgroundSize: "200% auto" }}
               animate={{ backgroundPosition: ["0% center", "200% center"] }}
               transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
