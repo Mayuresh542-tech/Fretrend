@@ -197,31 +197,24 @@ export default function Trends() {
     const dur = DURATIONS.find((d) => d.seconds === kitDuration) ?? DURATIONS[1];
 
     try {
-      // Read the user's saved Groq key from Supabase (same table the Settings page writes to)
-      let groqKey = "";
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data } = await supabase
-          .from("api_keys")
-          .select("groq_key")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        groqKey = (data?.groq_key ?? "").trim();
-      }
-
-      if (!groqKey) {
+      // The Groq key is read, decrypted, and used entirely server-side now —
+      // we just forward the user's access token so the API can identify them.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
         setNeedKey(true);
         return;
       }
 
       const res = await fetch("/api/content-kit", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({
           topic: kitTrend.title,
           niche: cachedNiche || niche || "general",
           score: kitTrend.trendScore,
-          groqKey,
           durationLabel: dur.label,
           wordCount: dur.words,
           format: dur.format,

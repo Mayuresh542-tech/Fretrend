@@ -13,20 +13,23 @@ export default function Settings() {
   const [saveError, setSaveError] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // Load existing key on mount so saving never overwrites with an empty string
+  // Load existing key on mount so saving never overwrites with an empty string.
+  // The key is decrypted server-side; we send the access token to identify the user.
   useEffect(() => {
     async function loadKeys() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setLoading(false); return; }
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setLoading(false); return; }
 
-      const { data } = await supabase
-        .from("api_keys")
-        .select("groq_key")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (data) {
-        setGroqKey(data.groq_key ?? "");
+      try {
+        const res = await fetch("/api/keys", {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setGroqKey(data.groqKey ?? "");
+        }
+      } catch {
+        /* leave the field blank on load failure */
       }
       setLoading(false);
     }
@@ -37,25 +40,28 @@ export default function Settings() {
     setSaving(true);
     setSaveError("");
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
       setSaveError("Not logged in.");
       setSaving(false);
       return;
     }
 
-    const { error } = await supabase
-      .from("api_keys")
-      .upsert({ user_id: user.id, groq_key: groqKey.trim() }, { onConflict: "user_id" });
+    // The key is AES-encrypted on the server before it's written to Supabase.
+    const res = await fetch("/api/keys", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ groqKey: groqKey.trim() }),
+    });
 
     setSaving(false);
 
-    if (error) {
-      if (error.message.includes("groq_key")) {
-        setSaveError('Column missing. Run in Supabase SQL editor: ALTER TABLE api_keys ADD COLUMN groq_key text;');
-      } else {
-        setSaveError(error.message);
-      }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setSaveError(data.error ?? "Failed to save key.");
       return;
     }
 
@@ -125,6 +131,13 @@ export default function Settings() {
                     {showGroq ? "Hide" : "Show"}
                   </button>
                 </div>
+                <p className="flex items-start gap-2 text-white/40 text-xs mt-3">
+                  <span aria-hidden>🔒</span>
+                  <span>
+                    Your API key is encrypted and stored securely. We never use your key
+                    for anything other than generating your content.
+                  </span>
+                </p>
               </div>
             </div>
 

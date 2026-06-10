@@ -1,4 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { decrypt } from "../../lib/crypto";
+
+// Reads the caller's Authorization header to fetch their key, so it must always
+// run dynamically at request time (never prerendered/cached).
+export const dynamic = "force-dynamic";
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+function adminClient(): SupabaseClient {
+  return createClient(SUPABASE_URL!, SERVICE_ROLE_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+/**
+ * Resolve the caller's Groq key: verify their bearer token, read the encrypted
+ * key from Supabase, and decrypt it server-side. The plaintext key never leaves
+ * the server. Returns the key, or an error string for the caller to surface.
+ */
+async function resolveGroqKey(
+  req: NextRequest,
+): Promise<{ groqKey: string } | { error: string; status: number }> {
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+    return { error: "Server is missing SUPABASE_SERVICE_ROLE_KEY.", status: 500 };
+  }
+
+  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) {
+    return { error: "Unauthorized", status: 401 };
+  }
+
+  const db = adminClient();
+  const { data: userData, error: userErr } = await db.auth.getUser(token);
+  if (userErr || !userData.user) {
+    return { error: "Unauthorized", status: 401 };
+  }
+
+  const { data } = await db
+    .from("api_keys")
+    .select("groq_key")
+    .eq("user_id", userData.user.id)
+    .maybeSingle();
+
+  const stored = data?.groq_key;
+  if (!stored) {
+    return { error: "missing_key", status: 400 };
+  }
+  return { groqKey: decrypt(stored).trim() };
+}
 
 export interface ContentKit {
   titles: string[];
@@ -28,11 +79,14 @@ function buildPrompt(
 
 export async function POST(req: NextRequest) {
   try {
-    const { topic, niche, score, groqKey, durationLabel, wordCount, format } = await req.json();
+    const { topic, niche, score, durationLabel, wordCount, format } = await req.json();
 
-    if (!groqKey?.trim()) {
-      return NextResponse.json({ error: "missing_key" }, { status: 400 });
+    const keyResult = await resolveGroqKey(req);
+    if ("error" in keyResult) {
+      return NextResponse.json({ error: keyResult.error }, { status: keyResult.status });
     }
+    const { groqKey } = keyResult;
+
     if (!topic?.trim()) {
       return NextResponse.json({ error: "Topic is required" }, { status: 400 });
     }
