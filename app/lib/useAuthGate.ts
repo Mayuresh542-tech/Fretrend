@@ -23,7 +23,9 @@ export function useAuthGate(): { status: AuthStatus; session: Session | null } {
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(({ data, error }) => {
+      // TEMP DEBUG — remove once the redirect-on-reopen cause is confirmed.
+      console.log("[authgate] getSession →", { hasSession: !!data.session, error });
       if (!mounted) return;
       if (data.session?.user) {
         setSession(data.session);
@@ -34,6 +36,9 @@ export function useAuthGate(): { status: AuthStatus; session: Session | null } {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      // TEMP DEBUG — this is the line that will reveal a SIGNED_OUT fired by a
+      // failed token refresh (the suspected real cause of the bounce on reopen).
+      console.log("[authgate] onAuthStateChange →", event, { hasSession: !!s });
       if (!mounted) return;
       if (s?.user) {
         setSession(s);
