@@ -1,10 +1,12 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabase";
+import { useAuthGate } from "../lib/useAuthGate";
 import { useRouter } from "next/navigation";
 import Sidebar from "../components/Sidebar";
 import AnimatedBackground from "../components/AnimatedBackground";
+import AuthLoadingScreen from "../components/AuthLoadingScreen";
 import type { ContentKit } from "../components/ContentKitPanel";
 
 interface SavedKit {
@@ -306,20 +308,25 @@ export default function SavedScripts() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      const { data: { session } } = await supabase.auth.getSession();
-      const user = session?.user;
-      if (!user) {
-        router.push("/login");
-        return;
-      }
+  const { status, session } = useAuthGate();
 
+  // Redirect only once the gate has resolved and found no session.
+  useEffect(() => {
+    if (status === "unauthed") router.push("/login");
+  }, [status, router]);
+
+  // Load saved reports once we're authed.
+  const loadedRef = useRef(false);
+  useEffect(() => {
+    if (status !== "authed" || !session || loadedRef.current) return;
+    loadedRef.current = true;
+
+    let cancelled = false;
+    (async () => {
       const { data, error: fetchError } = await supabase
         .from("content_kits")
         .select("id, topic, niche, virality_score, kit, created_at")
-        .eq("user_id", user.id)
+        .eq("user_id", session.user.id)
         .order("created_at", { ascending: false });
 
       if (cancelled) return;
@@ -334,12 +341,11 @@ export default function SavedScripts() {
         setReports((data as SavedKit[]) ?? []);
       }
       setLoading(false);
-    }
-    load();
+    })();
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [status, session]);
 
   async function deleteReport(id: string) {
     setDeletingId(id);
@@ -351,6 +357,10 @@ export default function SavedScripts() {
     }
     setReports((prev) => prev.filter((r) => r.id !== id));
     if (expandedId === id) setExpandedId(null);
+  }
+
+  if (status !== "authed") {
+    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
   }
 
   return (

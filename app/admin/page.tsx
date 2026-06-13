@@ -1,11 +1,13 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
+import { useAuthGate } from "../lib/useAuthGate";
 import { isAdminEmail } from "../lib/admin";
 import Sidebar from "../components/Sidebar";
 import AnimatedBackground from "../components/AnimatedBackground";
+import AuthLoadingScreen from "../components/AuthLoadingScreen";
 import CountUp from "../components/CountUp";
 
 interface AdminUser {
@@ -122,33 +124,35 @@ function Panel({ title, icon, children }: { title: string; icon: string; childre
 
 export default function AdminPanel() {
   const router = useRouter();
-  const [authChecked, setAuthChecked] = useState(false);
   const [data, setData] = useState<AdminData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [marking, setMarking] = useState<string | null>(null);
 
+  const { status, session } = useAuthGate();
+  // Client-side gate (UX only — the API enforces the real check server-side).
+  const isAdmin = status === "authed" && isAdminEmail(session?.user?.email);
+
+  // Send non-admins (and logged-out users) to the dashboard, but only once the
+  // gate has resolved — never mid-"loading", or we'd bounce a valid admin.
   useEffect(() => {
+    if (status === "unauthed" || (status === "authed" && !isAdmin)) {
+      router.replace("/dashboard");
+    }
+  }, [status, isAdmin, router]);
+
+  // Load admin data once we've confirmed an admin session.
+  const loadedRef = useRef(false);
+  useEffect(() => {
+    if (!isAdmin || !session || loadedRef.current) return;
+    loadedRef.current = true;
+
     let cancelled = false;
-    async function init() {
-      // Client-side gate (UX only — the API enforces the real check server-side).
-      const { data: { session } } = await supabase.auth.getSession();
-      const user = session?.user;
-      if (!user || !isAdminEmail(user.email)) {
-        router.replace("/dashboard");
-        return;
-      }
-      if (cancelled) return;
-      setAuthChecked(true);
-
-      const token = session.access_token;
-      if (!token) {
-        router.replace("/dashboard");
-        return;
-      }
-
+    (async () => {
       try {
-        const res = await fetch("/api/admin", { headers: { Authorization: `Bearer ${token}` } });
+        const res = await fetch("/api/admin", {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
         const json = await res.json();
         if (cancelled) return;
         if (!res.ok) {
@@ -161,12 +165,11 @@ export default function AdminPanel() {
       } finally {
         if (!cancelled) setLoading(false);
       }
-    }
-    init();
+    })();
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [isAdmin, session]);
 
   async function markRead(id: string) {
     setMarking(id);
@@ -191,21 +194,10 @@ export default function AdminPanel() {
     }
   }
 
-  // While verifying admin status, render nothing but the backdrop (avoids a flash
-  // of admin content before a non-admin gets redirected).
-  if (!authChecked) {
-    return (
-      <main className="relative min-h-screen text-white">
-        <AnimatedBackground />
-        <div className="relative z-10 flex items-center justify-center min-h-screen">
-          <motion.div
-            className="w-12 h-12 rounded-full border-2 border-transparent border-t-purple-400 border-r-cyan-400"
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-          />
-        </div>
-      </main>
-    );
+  // Hold on a spinner until we've confirmed an admin session — avoids flashing
+  // admin content before a non-admin (or logged-out user) gets redirected.
+  if (!isAdmin) {
+    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
   }
 
   const maxNiche = data?.popularNiches[0]?.count ?? 1;

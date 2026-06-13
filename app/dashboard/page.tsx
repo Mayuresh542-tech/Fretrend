@@ -1,10 +1,12 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { supabase } from "../lib/supabase";
+import { useAuthGate } from "../lib/useAuthGate";
 import { useRouter } from "next/navigation";
 import Sidebar from "../components/Sidebar";
 import AnimatedBackground from "../components/AnimatedBackground";
+import AuthLoadingScreen from "../components/AuthLoadingScreen";
 import CountUp from "../components/CountUp";
 
 interface TrendItem {
@@ -79,34 +81,32 @@ export default function Dashboard() {
   const [stats, setStats] = useState<UserStats>({ searches: 0, generated: 0, saved: 0, topNiche: null });
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [statsLoading, setStatsLoading] = useState(true);
+  const { status, session } = useAuthGate();
 
-  // Auth gate + user stats / activity feed.
+  // Redirect only once the gate has resolved and found no session.
   useEffect(() => {
-    let cancelled = false;
-    async function loadStats() {
-      // Read the persisted session locally (refreshing the token if needed)
-      // rather than getUser(), whose network round-trip would bounce the user
-      // to /login on any transient failure even with a valid stored session.
-      const { data: { session } } = await supabase.auth.getSession();
-      const user = session?.user;
-      if (!user) {
-        router.push("/login");
-        return;
-      }
+    if (status === "unauthed") router.replace("/login");
+  }, [status, router]);
 
+  // Load stats once, as soon as we're authed.
+  const statsLoadedRef = useRef(false);
+  useEffect(() => {
+    if (status !== "authed" || !session || statsLoadedRef.current) return;
+    statsLoadedRef.current = true;
+
+    const userId = session.user.id;
+    (async () => {
       const [searchCount, kitCount, niches, recent] = await Promise.all([
-        supabase.from("searches").select("*", { count: "exact", head: true }).eq("user_id", user.id),
-        supabase.from("content_kits").select("*", { count: "exact", head: true }).eq("user_id", user.id),
-        supabase.from("content_kits").select("niche").eq("user_id", user.id),
+        supabase.from("searches").select("*", { count: "exact", head: true }).eq("user_id", userId),
+        supabase.from("content_kits").select("*", { count: "exact", head: true }).eq("user_id", userId),
+        supabase.from("content_kits").select("niche").eq("user_id", userId),
         supabase
           .from("content_kits")
           .select("id, topic, niche, created_at")
-          .eq("user_id", user.id)
+          .eq("user_id", userId)
           .order("created_at", { ascending: false })
           .limit(5),
       ]);
-
-      if (cancelled) return;
 
       const kits = kitCount.count ?? 0;
       setStats({
@@ -117,12 +117,8 @@ export default function Dashboard() {
       });
       setActivity((recent.data as ActivityItem[]) ?? []);
       setStatsLoading(false);
-    }
-    loadStats();
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
+    })();
+  }, [status, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +149,12 @@ export default function Dashboard() {
     { icon: "💾", to: stats.saved, label: "Reports Saved", accent: "from-fuchsia-500/30 to-purple-500/20" },
     { icon: "🏷️", text: stats.topNiche ?? "—", label: "Top Niche", accent: "from-purple-500/30 to-cyan-500/20" },
   ];
+
+  // Hold the UI on a spinner until the gate resolves — never render the
+  // dashboard (or redirect) before the session check completes.
+  if (status !== "authed") {
+    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
+  }
 
   return (
     <main className="relative min-h-screen text-white flex">

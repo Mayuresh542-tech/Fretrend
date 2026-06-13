@@ -1,9 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
+import { useAuthGate } from "../lib/useAuthGate";
 import Sidebar from "../components/Sidebar";
 import AnimatedBackground from "../components/AnimatedBackground";
+import AuthLoadingScreen from "../components/AuthLoadingScreen";
 import ContentKitPanel, { DURATIONS, type ContentKit } from "../components/ContentKitPanel";
 
 interface TrendItem {
@@ -104,6 +107,14 @@ export default function Trends() {
   const [needKey, setNeedKey] = useState(false);
   const [savingKit, setSavingKit] = useState(false);
   const [savedKit, setSavedKit] = useState(false);
+
+  const router = useRouter();
+  const { status } = useAuthGate();
+
+  // Protected page: redirect logged-out visitors once the gate resolves.
+  useEffect(() => {
+    if (status === "unauthed") router.replace("/login");
+  }, [status, router]);
 
   useEffect(() => {
     try {
@@ -292,6 +303,10 @@ export default function Trends() {
     if (mins < 1) return "just now";
     if (mins < 60) return `${mins}m ago`;
     return `${Math.floor(mins / 60)}h ago`;
+  }
+
+  if (status !== "authed") {
+    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
   }
 
   return (

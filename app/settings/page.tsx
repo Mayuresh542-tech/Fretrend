@@ -1,11 +1,14 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
-import { supabase } from "../lib/supabase";
+import { useRouter } from "next/navigation";
+import { useAuthGate } from "../lib/useAuthGate";
 import Sidebar from "../components/Sidebar";
 import AnimatedBackground from "../components/AnimatedBackground";
+import AuthLoadingScreen from "../components/AuthLoadingScreen";
 
 export default function Settings() {
+  const router = useRouter();
   const [groqKey, setGroqKey] = useState("");
   const [showGroq, setShowGroq] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -13,13 +16,20 @@ export default function Settings() {
   const [saveError, setSaveError] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // Load existing key on mount so saving never overwrites with an empty string.
-  // The key is decrypted server-side; we send the access token to identify the user.
-  useEffect(() => {
-    async function loadKeys() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { setLoading(false); return; }
+  const { status, session } = useAuthGate();
 
+  // Protected page: redirect logged-out visitors once the gate resolves.
+  useEffect(() => {
+    if (status === "unauthed") router.replace("/login");
+  }, [status, router]);
+
+  // Load the existing key once authed so saving never overwrites with an empty
+  // string. The key is decrypted server-side; the access token identifies the user.
+  const loadedRef = useRef(false);
+  useEffect(() => {
+    if (status !== "authed" || !session || loadedRef.current) return;
+    loadedRef.current = true;
+    (async () => {
       try {
         const res = await fetch("/api/keys", {
           headers: { Authorization: `Bearer ${session.access_token}` },
@@ -32,20 +42,13 @@ export default function Settings() {
         /* leave the field blank on load failure */
       }
       setLoading(false);
-    }
-    loadKeys();
-  }, []);
+    })();
+  }, [status, session]);
 
   async function saveKeys() {
+    if (!session) return;
     setSaving(true);
     setSaveError("");
-
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      setSaveError("Not logged in.");
-      setSaving(false);
-      return;
-    }
 
     // The key is AES-encrypted on the server before it's written to Supabase.
     const res = await fetch("/api/keys", {
@@ -67,6 +70,10 @@ export default function Settings() {
 
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
+  }
+
+  if (status !== "authed") {
+    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
   }
 
   return (
