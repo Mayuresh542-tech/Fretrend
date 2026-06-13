@@ -127,7 +127,8 @@ export default function Trends() {
   // surface the most-searched niche. Fire-and-forget: failures are ignored.
   async function logSearch(query: string) {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user) return;
       await supabase.from("searches").insert({ user_id: user.id, niche: query });
     } catch {
@@ -247,7 +248,8 @@ export default function Trends() {
     setKitError(null);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user) {
         setKitError("Log in to save reports.");
         return;

@@ -132,7 +132,8 @@ export default function AdminPanel() {
     let cancelled = false;
     async function init() {
       // Client-side gate (UX only — the API enforces the real check server-side).
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user || !isAdminEmail(user.email)) {
         router.replace("/dashboard");
         return;
@@ -140,8 +141,7 @@ export default function AdminPanel() {
       if (cancelled) return;
       setAuthChecked(true);
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = session.access_token;
       if (!token) {
         router.replace("/dashboard");
         return;

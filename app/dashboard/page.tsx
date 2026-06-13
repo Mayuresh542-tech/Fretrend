@@ -84,7 +84,11 @@ export default function Dashboard() {
   useEffect(() => {
     let cancelled = false;
     async function loadStats() {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Read the persisted session locally (refreshing the token if needed)
+      // rather than getUser(), whose network round-trip would bounce the user
+      // to /login on any transient failure even with a valid stored session.
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user) {
         router.push("/login");
         return;

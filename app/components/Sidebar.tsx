@@ -25,8 +25,8 @@ export default function Sidebar({ active }: { active: Active }) {
   // the real access check; this just hides the link from everyone else.
   useEffect(() => {
     let cancelled = false;
-    supabase.auth.getUser().then(({ data }) => {
-      if (!cancelled) setIsAdmin(isAdminEmail(data.user?.email));
+    supabase.auth.getSession().then(({ data }) => {
+      if (!cancelled) setIsAdmin(isAdminEmail(data.session?.user?.email));
     });
     return () => {
       cancelled = true;
