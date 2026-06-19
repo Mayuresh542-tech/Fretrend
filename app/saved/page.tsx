@@ -315,21 +315,24 @@ export default function SavedScripts() {
     if (status === "unauthed") router.push("/login");
   }, [status, router]);
 
-  // Load saved reports once we're authed.
+  // Load saved reports once we're authed. The loadedRef guard makes the body run
+  // a single time. We deliberately do NOT cancel on cleanup: useAuthGate changes
+  // the `session` object identity (it sets it from getSession() and again from
+  // onAuthStateChange), and React Strict Mode re-invokes effects in dev — both
+  // re-run this effect. A cleanup that aborted the one in-flight request would
+  // leave `loading` stuck true forever, because the re-run is blocked by
+  // loadedRef and never starts a replacement request.
   const loadedRef = useRef(false);
   useEffect(() => {
     if (status !== "authed" || !session || loadedRef.current) return;
     loadedRef.current = true;
 
-    let cancelled = false;
     (async () => {
       const { data, error: fetchError } = await supabase
         .from("content_kits")
         .select("id, topic, niche, virality_score, kit, created_at")
         .eq("user_id", session.user.id)
         .order("created_at", { ascending: false });
-
-      if (cancelled) return;
 
       if (fetchError) {
         setError(
@@ -342,9 +345,6 @@ export default function SavedScripts() {
       }
       setLoading(false);
     })();
-    return () => {
-      cancelled = true;
-    };
   }, [status, session]);
 
   async function deleteReport(id: string) {

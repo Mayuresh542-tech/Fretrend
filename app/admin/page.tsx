@@ -141,34 +141,35 @@ export default function AdminPanel() {
     }
   }, [status, isAdmin, router]);
 
-  // Load admin data once we've confirmed an admin session.
+  // Load admin data once we've confirmed an admin session. The loadedRef guard
+  // makes the body run a single time. We deliberately do NOT cancel on cleanup:
+  // useAuthGate changes the `session` object identity (it sets it from
+  // getSession() and again from onAuthStateChange), and React Strict Mode
+  // re-invokes effects in dev — both re-run this effect. A cleanup that aborted
+  // the one in-flight request would leave `loading` stuck true forever, because
+  // the re-run is blocked by loadedRef and never starts a replacement request.
   const loadedRef = useRef(false);
   useEffect(() => {
     if (!isAdmin || !session || loadedRef.current) return;
     loadedRef.current = true;
 
-    let cancelled = false;
     (async () => {
       try {
         const res = await fetch("/api/admin", {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
         const json = await res.json();
-        if (cancelled) return;
         if (!res.ok) {
           setError(json.error ?? "Failed to load admin data.");
         } else {
           setData(json as AdminData);
         }
       } catch {
-        if (!cancelled) setError("Network error loading admin data.");
+        setError("Network error loading admin data.");
       } finally {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
   }, [isAdmin, session]);
 
   async function markRead(id: string) {

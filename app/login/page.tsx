@@ -15,10 +15,29 @@ export default function Login() {
   async function handleLogin() {
     setLoading(true);
     setError("");
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
+
+    // Login diagnostics. NOTE: the session is persisted to COOKIES
+    // (storageKey "fretrend-auth", see app/lib/supabase.ts), not localStorage —
+    // so an empty localStorage after login is expected, not a bug. To confirm
+    // the token was stored, look at document.cookie for "fretrend-auth.0".
+    console.log("[login] signInWithPassword →", {
+      success: !error,
+      sessionCreated: !!data?.session,
+      hasAccessToken: !!data?.session?.access_token,
+      user: data?.user?.email ?? null,
+      error: error?.message ?? null,
+    });
+    if (data?.session) {
+      console.log(
+        "[login] token cookie present:",
+        document.cookie.includes("fretrend-auth"),
+      );
+    }
+
     if (error) {
       setError(error.message);
       setLoading(false);
