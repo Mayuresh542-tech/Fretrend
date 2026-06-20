@@ -8,6 +8,7 @@ import Sidebar from "../components/Sidebar";
 import AnimatedBackground from "../components/AnimatedBackground";
 import AuthLoadingScreen from "../components/AuthLoadingScreen";
 import CountUp from "../components/CountUp";
+import OnboardingFlow from "../components/OnboardingFlow";
 
 interface TrendItem {
   title: string;
@@ -159,6 +160,7 @@ export default function Dashboard() {
   return (
     <main className="relative min-h-screen text-white flex">
       <AnimatedBackground />
+      {session && <OnboardingFlow userId={session.user.id} />}
       <Sidebar active="dashboard" />
 
       <motion.div
