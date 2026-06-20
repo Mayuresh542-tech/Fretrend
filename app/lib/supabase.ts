@@ -64,19 +64,66 @@ const cookieStorage = {
   getItem(key: string): string | null {
     const jar = readCookies()
     let encoded = ''
-    let found = false
+    let chunkCount = 0
     for (let i = 0; ; i++) {
       const chunk = jar.get(`${key}.${i}`)
       if (chunk === undefined) break
       encoded += chunk
-      found = true
+      chunkCount++
     }
-    if (!found) return null
-    try {
-      return decodeURIComponent(encoded)
-    } catch {
+
+    if (chunkCount === 0) {
+      // TEMP DEBUG — remove once the reopen cause is confirmed. If this fires on
+      // reopen for 'fretrend-auth', the chunks didn't survive the restart at all.
+      if (key === 'fretrend-auth') {
+        console.log('[cookieStorage.getItem] no chunks for', key, '— cookie names present:', [...jar.keys()])
+      }
       return null
     }
+
+    let decoded: string | null = null
+    let decodeError: unknown = null
+    try {
+      decoded = decodeURIComponent(encoded)
+    } catch (e) {
+      // A throw here means the reassembled value has a malformed %-sequence,
+      // which in practice means a chunk is missing/truncated (e.g. trailing
+      // chunk dropped) — i.e. a real dechunking problem, not just bad JSON.
+      decodeError = e
+    }
+
+    // TEMP DEBUG — this is the line that distinguishes the three reopen failure
+    // modes: (a) decodeOk=false → missing/truncated chunk; (b) decodeOk=true but
+    // jsonParseOk=false → corrupted value (auth-js discards it WITHOUT clearing
+    // the cookie, so it "persists but doesn't restore"); (c) both ok but
+    // expired=true → the session is fine and the bounce is a failed token
+    // refresh, not storage. Remove once confirmed.
+    if (key === 'fretrend-auth') {
+      let jsonParseOk = false
+      let expiresInfo: string | null = null
+      if (decoded !== null) {
+        try {
+          const s = JSON.parse(decoded)
+          jsonParseOk = true
+          if (s?.expires_at) {
+            const secs = s.expires_at - Math.floor(Date.now() / 1000)
+            expiresInfo = `${secs}s left (${secs < 0 ? 'EXPIRED' : 'valid'})`
+          }
+        } catch {
+          /* jsonParseOk stays false */
+        }
+      }
+      console.log('[cookieStorage.getItem]', key, {
+        chunkCount,
+        encodedLen: encoded.length,
+        decodeOk: decodeError === null,
+        decodeError: decodeError ? String(decodeError) : null,
+        jsonParseOk,
+        expiresInfo,
+      })
+    }
+
+    return decoded
   },
 
   setItem(key: string, value: string): void {
