@@ -76,6 +76,7 @@ export default function OnboardingFlow({ userId }: { userId: string }) {
   useEffect(() => {
     if (checkedRef.current) return;
     checkedRef.current = true;
+    console.log("[OnboardingFlow] mounted — checking profile for", userId);
     (async () => {
       try {
         const { data, error } = await supabase
@@ -83,11 +84,36 @@ export default function OnboardingFlow({ userId }: { userId: string }) {
           .select("onboarding_completed")
           .eq("id", userId)
           .maybeSingle();
-        if (!error && data && data.onboarding_completed === false) {
-          setVisible(true);
+        console.log("[OnboardingFlow] profile check →", { data, error });
+
+        if (error) {
+          // Table missing or query blocked — we can't decide, so stay closed.
+          console.warn("[OnboardingFlow] profile query failed, not showing:", error.message);
+          return;
         }
-      } catch {
-        /* keep the flow closed on any failure */
+
+        if (!data) {
+          // No profile row yet → this is a first run. We do NOT rely on the DB
+          // signup trigger (it may not be installed); create the row here and
+          // show onboarding. ignoreDuplicates avoids clobbering a row that a
+          // concurrent run/trigger may have just inserted.
+          console.log("[OnboardingFlow] no profile row → creating one + showing onboarding");
+          const { error: insErr } = await supabase
+            .from("profiles")
+            .upsert({ id: userId, onboarding_completed: false }, { onConflict: "id", ignoreDuplicates: true });
+          if (insErr) console.warn("[OnboardingFlow] could not create profile row:", insErr.message);
+          setVisible(true);
+          return;
+        }
+
+        if (data.onboarding_completed === false) {
+          console.log("[OnboardingFlow] onboarding incomplete → showing");
+          setVisible(true);
+        } else {
+          console.log("[OnboardingFlow] onboarding already completed → not showing");
+        }
+      } catch (e) {
+        console.warn("[OnboardingFlow] profile check threw, not showing:", e);
       }
     })();
   }, [userId]);
