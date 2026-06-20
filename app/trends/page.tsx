@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
@@ -108,13 +108,63 @@ export default function Trends() {
   const [savingKit, setSavingKit] = useState(false);
   const [savedKit, setSavedKit] = useState(false);
 
+  // --- Trend Alerts: which niches the user tracks (keys lowercased) ---
+  const [savedNiches, setSavedNiches] = useState<Set<string>>(new Set());
+  const [alertSaving, setAlertSaving] = useState(false);
+
   const router = useRouter();
-  const { status } = useAuthGate();
+  const { status, session } = useAuthGate();
 
   // Protected page: redirect logged-out visitors once the gate resolves.
   useEffect(() => {
     if (status === "unauthed") router.replace("/login");
   }, [status, router]);
+
+  // Load the user's saved alert niches once authed (run-once, no cancel-cleanup).
+  const nichesLoadedRef = useRef(false);
+  useEffect(() => {
+    if (status !== "authed" || !session || nichesLoadedRef.current) return;
+    nichesLoadedRef.current = true;
+    (async () => {
+      const { data } = await supabase
+        .from("saved_niches")
+        .select("niche")
+        .eq("user_id", session.user.id);
+      setSavedNiches(new Set((data ?? []).map((r: { niche: string }) => r.niche.toLowerCase())));
+    })();
+  }, [status, session]);
+
+  // Toggle the current niche in/out of Trend Alerts.
+  async function toggleAlertNiche() {
+    const n = (niche.trim() || cachedNiche).trim();
+    if (!n || !session) return;
+    const key = n.toLowerCase();
+    const wasSaved = savedNiches.has(key);
+    setAlertSaving(true);
+    try {
+      if (wasSaved) {
+        setSavedNiches((prev) => {
+          const s = new Set(prev);
+          s.delete(key);
+          return s;
+        });
+        await supabase.from("saved_niches").delete().eq("user_id", session.user.id).ilike("niche", n);
+      } else {
+        setSavedNiches((prev) => new Set(prev).add(key));
+        const { error } = await supabase.from("saved_niches").insert({ user_id: session.user.id, niche: n });
+        // 23505 = already saved (unique violation) — fine; revert only on real errors.
+        if (error && error.code !== "23505") {
+          setSavedNiches((prev) => {
+            const s = new Set(prev);
+            s.delete(key);
+            return s;
+          });
+        }
+      }
+    } finally {
+      setAlertSaving(false);
+    }
+  }
 
   useEffect(() => {
     try {
@@ -384,6 +434,39 @@ export default function Trends() {
               </motion.button>
             )}
           </motion.div>
+
+          {/* Save current niche for Trend Alerts */}
+          {(niche.trim() || cachedNiche) && (() => {
+            const isSaved = savedNiches.has((niche.trim() || cachedNiche).trim().toLowerCase());
+            return (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-6 -mt-1"
+              >
+                <motion.button
+                  onClick={toggleAlertNiche}
+                  disabled={alertSaving}
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  title="Get personalized trend alerts for this niche"
+                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border transition disabled:opacity-60 ${
+                    isSaved
+                      ? "bg-purple-600/15 border-purple-500/40 text-purple-200"
+                      : "bg-white/5 border-white/10 text-white/70 hover:text-white hover:border-purple-500/40"
+                  }`}
+                >
+                  <span>🔔</span>
+                  {isSaved ? "Saved for Alerts ✓" : "Save for Alerts"}
+                </motion.button>
+                {isSaved && (
+                  <a href="/alerts" className="ml-3 text-xs text-purple-300/80 hover:text-purple-200 transition">
+                    View Trend Alerts →
+                  </a>
+                )}
+              </motion.div>
+            );
+          })()}
 
           {/* Source summary pills */}
           {sources && !loading && allTrends.length > 0 && (

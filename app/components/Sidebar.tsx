@@ -4,12 +4,14 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { isAdminEmail } from "../lib/admin";
+import { useAlertCount } from "../lib/alerts";
 
-type Active = "dashboard" | "trends" | "saved" | "settings" | "how-to-use" | "suggestions" | "admin";
+type Active = "dashboard" | "trends" | "alerts" | "saved" | "settings" | "how-to-use" | "suggestions" | "admin";
 
 const NAV: { id: Active; href: string; icon: string; label: string }[] = [
   { id: "dashboard", href: "/dashboard", icon: "🏠", label: "Dashboard" },
   { id: "trends", href: "/trends", icon: "🔥", label: "Trends" },
+  { id: "alerts", href: "/alerts", icon: "🔔", label: "Trend Alerts" },
   { id: "saved", href: "/saved", icon: "🔖", label: "Saved Scripts" },
   { id: "settings", href: "/settings", icon: "⚙️", label: "Settings" },
   { id: "how-to-use", href: "/how-to-use", icon: "❓", label: "How to Use" },
@@ -20,6 +22,9 @@ export default function Sidebar({ active }: { active: Active }) {
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  // Bell badge: total trends across saved niches, last computed by /alerts.
+  const alertCount = useAlertCount();
 
   // Reveal the admin link only for the admin account. The page + API enforce
   // the real access check; this just hides the link from everyone else.
@@ -99,6 +104,11 @@ export default function Sidebar({ active }: { active: Active }) {
                 )}
                 <span className="relative z-10 text-lg">{item.icon}</span>
                 <span className="relative z-10 font-medium">{item.label}</span>
+                {item.id === "alerts" && alertCount > 0 && (
+                  <span className="relative z-10 ml-auto min-w-5 px-1.5 h-5 flex items-center justify-center rounded-full text-[11px] font-bold bg-gradient-to-r from-purple-500 to-cyan-500 text-white">
+                    {alertCount > 99 ? "99+" : alertCount}
+                  </span>
+                )}
               </motion.a>
             );
           })}
@@ -200,6 +210,11 @@ export default function Sidebar({ active }: { active: Active }) {
                     >
                       <span className="text-lg">{item.icon}</span>
                       <span className="font-medium">{item.label}</span>
+                      {item.id === "alerts" && alertCount > 0 && (
+                        <span className="ml-auto min-w-5 px-1.5 h-5 flex items-center justify-center rounded-full text-[11px] font-bold bg-gradient-to-r from-purple-500 to-cyan-500 text-white">
+                          {alertCount > 99 ? "99+" : alertCount}
+                        </span>
+                      )}
                     </a>
                   );
                 })}

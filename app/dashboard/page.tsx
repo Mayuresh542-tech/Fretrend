@@ -9,6 +9,7 @@ import AnimatedBackground from "../components/AnimatedBackground";
 import AuthLoadingScreen from "../components/AuthLoadingScreen";
 import CountUp from "../components/CountUp";
 import OnboardingFlow from "../components/OnboardingFlow";
+import { useAlertCount } from "../lib/alerts";
 
 interface TrendItem {
   title: string;
@@ -83,6 +84,9 @@ export default function Dashboard() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [statsLoading, setStatsLoading] = useState(true);
   const { status, session } = useAuthGate();
+
+  // Bell badge: total trends across saved niches (computed by /alerts).
+  const alertCount = useAlertCount();
 
   // Redirect only once the gate has resolved and found no session.
   useEffect(() => {
@@ -187,14 +191,35 @@ export default function Dashboard() {
             </motion.h2>
             <p className="text-white/50 text-sm mt-1">Welcome back — the web is moving fast 👋</p>
           </div>
-          <motion.a
-            href="/trends"
-            whileHover={{ scale: 1.05, boxShadow: "0 0 30px -6px rgba(124,58,237,0.7)" }}
-            whileTap={{ scale: 0.96 }}
-            className="shrink-0 px-4 py-2.5 sm:px-6 sm:py-3 rounded-xl text-sm sm:text-base font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 whitespace-nowrap"
-          >
-            🔥 Explore Trends
-          </motion.a>
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <motion.a
+              href="/alerts"
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.94 }}
+              title="Trend Alerts"
+              className="relative w-11 h-11 flex items-center justify-center rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition text-lg"
+            >
+              <motion.span
+                animate={alertCount > 0 ? { rotate: [0, -12, 12, -8, 8, 0] } : undefined}
+                transition={{ duration: 1.4, repeat: Infinity, repeatDelay: 3 }}
+              >
+                🔔
+              </motion.span>
+              {alertCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-5 px-1 h-5 flex items-center justify-center rounded-full text-[10px] font-bold bg-gradient-to-r from-purple-500 to-cyan-500 text-white">
+                  {alertCount > 99 ? "99+" : alertCount}
+                </span>
+              )}
+            </motion.a>
+            <motion.a
+              href="/trends"
+              whileHover={{ scale: 1.05, boxShadow: "0 0 30px -6px rgba(124,58,237,0.7)" }}
+              whileTap={{ scale: 0.96 }}
+              className="px-4 py-2.5 sm:px-6 sm:py-3 rounded-xl text-sm sm:text-base font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 whitespace-nowrap"
+            >
+              🔥 Explore Trends
+            </motion.a>
+          </div>
         </motion.div>
 
         {/* User stats */}
