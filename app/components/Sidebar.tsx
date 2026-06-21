@@ -6,12 +6,13 @@ import { supabase } from "../lib/supabase";
 import { isAdminEmail } from "../lib/admin";
 import { useAlertCount } from "../lib/alerts";
 
-type Active = "dashboard" | "trends" | "alerts" | "saved" | "settings" | "how-to-use" | "suggestions" | "admin";
+type Active = "dashboard" | "trends" | "alerts" | "competitors" | "saved" | "settings" | "how-to-use" | "suggestions" | "admin";
 
 const NAV: { id: Active; href: string; icon: string; label: string }[] = [
   { id: "dashboard", href: "/dashboard", icon: "🏠", label: "Dashboard" },
   { id: "trends", href: "/trends", icon: "🔥", label: "Trends" },
   { id: "alerts", href: "/alerts", icon: "🔔", label: "Trend Alerts" },
+  { id: "competitors", href: "/competitors", icon: "📊", label: "Competitor Analysis" },
   { id: "saved", href: "/saved", icon: "🔖", label: "Saved Scripts" },
   { id: "settings", href: "/settings", icon: "⚙️", label: "Settings" },
   { id: "how-to-use", href: "/how-to-use", icon: "❓", label: "How to Use" },
