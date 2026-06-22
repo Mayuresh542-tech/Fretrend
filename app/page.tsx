@@ -1,7 +1,28 @@
 "use client";
+import { useEffect } from "react";
 import { motion } from "framer-motion";
+import { useRouter } from "next/navigation";
+import { useAuthGate } from "./lib/useAuthGate";
+import AuthLoadingScreen from "./components/AuthLoadingScreen";
 
 export default function Home() {
+  const router = useRouter();
+  const { status } = useAuthGate();
+
+  // A logged-in visitor to the landing page is sent to their dashboard so the
+  // app doesn't look logged-out. The dashboard gates unauthed users to /login
+  // (not back here), so this can't ping-pong into a redirect loop.
+  useEffect(() => {
+    if (status === "authed") router.replace("/dashboard");
+  }, [status, router]);
+
+  // Block render until we know the session state. While "loading" we're still
+  // resolving it; while "authed" we're mid-redirect — in both cases show the
+  // spinner so the homepage never flashes before the bounce to /dashboard.
+  if (status !== "unauthed") {
+    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
+  }
+
   return (
     <main className="min-h-screen bg-[#0a0a0a] text-white overflow-hidden">
       <motion.nav
