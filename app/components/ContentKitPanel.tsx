@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { supabase } from "../lib/supabase";
 
 export interface ContentKit {
   titles: string[];
@@ -34,6 +35,7 @@ interface PanelProps {
   open: boolean;
   onClose: () => void;
   topic: string;
+  niche?: string;
   score: number;
   started: boolean;
   duration: number;
@@ -209,10 +211,253 @@ function KitSkeleton() {
   );
 }
 
+// --- Multi-Platform Kit ---
+
+interface Platform {
+  id: string;
+  name: string;
+  icon: string;
+  accent: string; // gradient for the active-tab pill
+  ring: string; // active-tab border
+  dot: string; // section-bullet color
+}
+
+const PLATFORMS: Platform[] = [
+  { id: "youtube", name: "YouTube", icon: "▶️", accent: "from-red-500/25 to-rose-500/10", ring: "border-rose-500/40", dot: "bg-rose-400" },
+  { id: "tiktok", name: "TikTok", icon: "🎵", accent: "from-cyan-500/25 to-teal-500/10", ring: "border-cyan-500/40", dot: "bg-cyan-400" },
+  { id: "reels", name: "Reels", icon: "📸", accent: "from-pink-500/25 to-fuchsia-500/10", ring: "border-pink-500/40", dot: "bg-pink-400" },
+  { id: "twitter", name: "X", icon: "𝕏", accent: "from-sky-500/25 to-blue-500/10", ring: "border-sky-500/40", dot: "bg-sky-400" },
+  { id: "linkedin", name: "LinkedIn", icon: "💼", accent: "from-blue-500/25 to-indigo-500/10", ring: "border-blue-500/40", dot: "bg-blue-400" },
+];
+
+interface PlatformSection {
+  label: string;
+  kind: "text" | "list";
+  value: string | string[];
+}
+
+/** Renders one platform's generated sections with copy buttons. */
+function PlatformSections({ sections, dot }: { sections: PlatformSection[]; dot: string }) {
+  return (
+    <div className="flex flex-col gap-3">
+      {sections.map((s, i) => {
+        const isList = Array.isArray(s.value);
+        const list = isList ? (s.value as string[]) : [];
+        // Short list items (hashtags, tags, sounds) read best as chips; long
+        // ones (thread tweets) as individually-copyable stacked lines.
+        const asChips = isList && list.every((v) => v.length <= 30);
+        const copyAll = isList ? list.join(asChips ? " " : "\n") : (s.value as string);
+        return (
+          <motion.div
+            key={`${s.label}-${i}`}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.05 }}
+            className="rounded-xl bg-white/[0.03] border border-white/5 p-3"
+          >
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h5 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-white/40">
+                <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+                {s.label}
+              </h5>
+              <CopyBtn text={copyAll} />
+            </div>
+
+            {!isList ? (
+              <ScriptBody script={s.value as string} />
+            ) : asChips ? (
+              <div className="flex flex-wrap gap-1.5">
+                {list.map((chip, j) => (
+                  <span
+                    key={j}
+                    className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/70"
+                  >
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {list.map((line, j) => (
+                  <div
+                    key={j}
+                    className="group flex items-start gap-2 rounded-lg bg-white/[0.03] border border-white/5 p-2.5"
+                  >
+                    <p className="flex-1 text-sm text-white/85 whitespace-pre-wrap leading-snug">{line}</p>
+                    <CopyBtn text={line} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Self-contained multi-platform repurposer. Lives inside the kit so both the
+ * trends and alerts pages get it for free. It resolves the user's session
+ * itself and calls /api/platform-kit on demand, caching each platform's result
+ * so switching tabs is instant. Remount (keyed by topic) resets the cache.
+ */
+function MultiPlatformSection({ topic, niche, score }: { topic: string; niche?: string; score: number }) {
+  const [active, setActive] = useState<string | null>(null);
+  const [cache, setCache] = useState<Record<string, PlatformSection[]>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [needKey, setNeedKey] = useState(false);
+
+  const activeMeta = PLATFORMS.find((p) => p.id === active) ?? null;
+  const isLoading = loadingId !== null && loadingId === active;
+  const activeError = active ? errors[active] : undefined;
+  const activeSections = active ? cache[active] : undefined;
+
+  async function generate(platform: string) {
+    setLoadingId(platform);
+    setNeedKey(false);
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next[platform];
+      return next;
+    });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setNeedKey(true);
+        return;
+      }
+      const res = await fetch("/api/platform-kit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ topic, niche: niche || "general", score, platform }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.error === "missing_key") {
+          setNeedKey(true);
+          return;
+        }
+        const msg =
+          data.error === "invalid_key"
+            ? "Your Groq API key was rejected. Update it in Settings."
+            : data.error ?? "Failed to generate platform content.";
+        setErrors((prev) => ({ ...prev, [platform]: msg }));
+        return;
+      }
+      setCache((prev) => ({ ...prev, [platform]: data.sections }));
+    } catch {
+      setErrors((prev) => ({ ...prev, [platform]: "Something went wrong — try again." }));
+    } finally {
+      setLoadingId((id) => (id === platform ? null : id));
+    }
+  }
+
+  function selectPlatform(platform: string) {
+    setActive(platform);
+    setNeedKey(false);
+    if (!cache[platform] && loadingId !== platform) void generate(platform);
+  }
+
+  // Which view to show — drives the AnimatePresence key for smooth swaps.
+  let viewKey = "empty";
+  if (active) {
+    if (needKey) viewKey = "needkey";
+    else if (isLoading) viewKey = `loading-${active}`;
+    else if (activeError) viewKey = `error-${active}`;
+    else if (activeSections) viewKey = `content-${active}`;
+    else viewKey = `idle-${active}`;
+  }
+
+  return (
+    <div>
+      {/* Platform tabs */}
+      <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
+        {PLATFORMS.map((p) => {
+          const isActive = p.id === active;
+          return (
+            <motion.button
+              key={p.id}
+              onClick={() => selectPlatform(p.id)}
+              whileTap={{ scale: 0.95 }}
+              className={`relative shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                isActive ? "text-white" : "text-white/50 hover:text-white"
+              }`}
+            >
+              {isActive && (
+                <motion.span
+                  layoutId="platform-pill"
+                  className={`absolute inset-0 rounded-lg bg-gradient-to-r ${p.accent} border ${p.ring}`}
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10 text-sm">{p.icon}</span>
+              <span className="relative z-10">{p.name}</span>
+            </motion.button>
+          );
+        })}
+      </div>
+
+      {/* Active platform content */}
+      <div className="mt-3 min-h-[72px]">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={viewKey}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.22 }}
+          >
+            {!active ? (
+              <p className="text-center text-sm text-white/40 py-6">
+                Pick a platform to generate content tailored to it.
+              </p>
+            ) : needKey ? (
+              <div className="text-center py-6">
+                <div className="text-3xl mb-2">🔑</div>
+                <p className="text-sm text-white/60 mb-3">Add your Groq key to generate platform content.</p>
+                <a
+                  href="/settings"
+                  className="inline-block px-4 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-purple-600 to-cyan-500"
+                >
+                  ⚙️ Open Settings
+                </a>
+              </div>
+            ) : isLoading ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <motion.div
+                  className="w-8 h-8 mb-3 rounded-full border-2 border-purple-500/20 border-t-purple-400"
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 0.9, repeat: Infinity, ease: "linear" }}
+                />
+                <p className="text-xs text-white/50">Optimizing for {activeMeta?.name}…</p>
+              </div>
+            ) : activeError ? (
+              <div className="text-center py-6">
+                <p className="text-sm text-red-400/80 mb-3">{activeError}</p>
+                <button
+                  onClick={() => void generate(active)}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
+                >
+                  ↻ Try again
+                </button>
+              </div>
+            ) : activeSections ? (
+              <PlatformSections sections={activeSections} dot={activeMeta?.dot ?? "bg-purple-400"} />
+            ) : null}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
+
 export default function ContentKitPanel({
   open,
   onClose,
   topic,
+  niche,
   score,
   started,
   duration,
@@ -461,6 +706,15 @@ export default function ContentKitPanel({
                   <section>
                     <SectionTitle icon="🚀">Virality Tips</SectionTitle>
                     <ItemList items={kit.virality_tips} />
+                  </section>
+
+                  {/* Multi-platform repurposing */}
+                  <section>
+                    <SectionTitle icon="🌐">Multi-Platform Kit</SectionTitle>
+                    <p className="text-xs text-white/40 -mt-1 mb-3">
+                      Repurpose this trend with content tailored to each platform.
+                    </p>
+                    <MultiPlatformSection key={topic} topic={topic} niche={niche} score={score} />
                   </section>
                 </div>
               )}

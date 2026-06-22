@@ -523,6 +523,7 @@ export default function Alerts() {
         open={kitOpen}
         onClose={() => setKitOpen(false)}
         topic={kitTrend?.title ?? ""}
+        niche={kitNiche || "general"}
         score={kitTrend?.trendScore ?? 0}
         started={kitStarted}
         duration={kitDuration}

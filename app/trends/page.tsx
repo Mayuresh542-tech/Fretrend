@@ -714,6 +714,7 @@ export default function Trends() {
         open={kitOpen}
         onClose={() => setKitOpen(false)}
         topic={kitTrend?.title ?? ""}
+        niche={cachedNiche || niche || "general"}
         score={kitTrend?.trendScore ?? 0}
         started={kitStarted}
         duration={kitDuration}
