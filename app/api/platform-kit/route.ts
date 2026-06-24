@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "../../lib/crypto";
+import { buildVoiceInstruction, DEFAULT_BRAND_VOICE } from "../../lib/brandVoice";
 
 // Reads the caller's Authorization header to fetch their Groq key, so it must
 // always run dynamically at request time (never prerendered/cached).
@@ -20,11 +21,13 @@ function adminClient(): SupabaseClient {
 
 /**
  * Resolve the caller's Groq key: verify their bearer token, read the encrypted
- * key from Supabase, and decrypt it server-side. Mirrors the content-kit route.
+ * key from Supabase, and decrypt it server-side. Mirrors the content-kit route,
+ * also returning the verified client + user id so the caller can read the user's
+ * brand voice without a second auth round-trip.
  */
 async function resolveGroqKey(
   req: NextRequest,
-): Promise<{ groqKey: string } | { error: string; status: number }> {
+): Promise<{ groqKey: string; db: SupabaseClient; userId: string } | { error: string; status: number }> {
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
     return { error: "Server is missing SUPABASE_SERVICE_ROLE_KEY.", status: 500 };
   }
@@ -44,7 +47,25 @@ async function resolveGroqKey(
 
   const stored = data?.groq_key;
   if (!stored) return { error: "missing_key", status: 400 };
-  return { groqKey: decrypt(stored).trim() };
+  return { groqKey: decrypt(stored).trim(), db, userId: userData.user.id };
+}
+
+/**
+ * Read the user's saved Brand Voice and turn it into a tone instruction for the
+ * Groq system prompt. Defensive: any failure falls back to the neutral Balanced
+ * voice so platform repurposing never breaks. Mirrors the content-kit route.
+ */
+async function resolveVoiceInstruction(db: SupabaseClient, userId: string): Promise<string> {
+  try {
+    const { data } = await db
+      .from("profiles")
+      .select("brand_voice, brand_voice_custom")
+      .eq("id", userId)
+      .maybeSingle();
+    return buildVoiceInstruction(data?.brand_voice, data?.brand_voice_custom);
+  } catch {
+    return buildVoiceInstruction(DEFAULT_BRAND_VOICE, null);
+  }
 }
 
 export interface PlatformSection {
@@ -120,7 +141,7 @@ export async function POST(req: NextRequest) {
     if ("error" in keyResult) {
       return NextResponse.json({ error: keyResult.error }, { status: keyResult.status });
     }
-    const { groqKey } = keyResult;
+    const { groqKey, db, userId } = keyResult;
 
     const cleanTopic = String(topic ?? "").trim();
     if (!cleanTopic) {
@@ -130,6 +151,9 @@ export async function POST(req: NextRequest) {
     if (!spec) {
       return NextResponse.json({ error: "Unknown platform" }, { status: 400 });
     }
+
+    // The user's Brand Voice shapes the tone of the repurposed content.
+    const voiceInstruction = await resolveVoiceInstruction(db, userId);
 
     const prompt = buildPrompt(
       cleanTopic,
@@ -148,7 +172,13 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           model: GROQ_MODEL,
-          messages: [{ role: "user", content: prompt }],
+          messages: [
+            {
+              role: "system",
+              content: `You are a platform-native content strategist. ${voiceInstruction} Keep this brand voice while still respecting each platform's native format, length, and best practices.`,
+            },
+            { role: "user", content: prompt },
+          ],
           temperature: 0.85,
           max_tokens: 4096,
           response_format: { type: "json_object" },

@@ -8,6 +8,7 @@ import Sidebar from "../components/Sidebar";
 import AnimatedBackground from "../components/AnimatedBackground";
 import AuthLoadingScreen from "../components/AuthLoadingScreen";
 import ContentKitPanel, { DURATIONS, type ContentKit } from "../components/ContentKitPanel";
+import BrandVoiceBadge from "../components/BrandVoiceBadge";
 
 interface TrendItem {
   title: string;
@@ -371,19 +372,22 @@ export default function Trends() {
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            className="mb-8"
+            className="mb-8 flex items-start justify-between gap-3"
           >
-            <motion.h2
-              className="text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
-              style={{ backgroundSize: "200% auto" }}
-              animate={{ backgroundPosition: ["0% center", "200% center"] }}
-              transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
-            >
-              Trend Radar
-            </motion.h2>
-            <p className="text-white/50 text-sm mt-1">
-              Real-time intelligence across Google Trends, HackerNews, Reddit, YouTube &amp; Google News
-            </p>
+            <div className="min-w-0">
+              <motion.h2
+                className="text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
+                style={{ backgroundSize: "200% auto" }}
+                animate={{ backgroundPosition: ["0% center", "200% center"] }}
+                transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+              >
+                Trend Radar
+              </motion.h2>
+              <p className="text-white/50 text-sm mt-1">
+                Real-time intelligence across Google Trends, HackerNews, Reddit, YouTube &amp; Google News
+              </p>
+            </div>
+            <BrandVoiceBadge className="mt-1 shrink-0" />
           </motion.div>
 
           {/* Search bar with glowing focus border */}

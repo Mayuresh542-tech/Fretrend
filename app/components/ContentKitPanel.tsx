@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabase";
+import BrandVoiceBadge from "./BrandVoiceBadge";
 
 export interface ContentKit {
   titles: string[];
@@ -513,6 +514,9 @@ export default function ContentKitPanel({
                   <p className="text-sm text-white/60 truncate" title={topic}>
                     {topic}
                   </p>
+                  <div className="mt-2">
+                    <BrandVoiceBadge />
+                  </div>
                 </div>
                 <button
                   onClick={onClose}

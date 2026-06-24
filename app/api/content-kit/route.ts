@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { decrypt } from "../../lib/crypto";
+import { buildVoiceInstruction, DEFAULT_BRAND_VOICE } from "../../lib/brandVoice";
 
 // Reads the caller's Authorization header to fetch their key, so it must always
 // run dynamically at request time (never prerendered/cached).
@@ -18,11 +19,12 @@ function adminClient(): SupabaseClient {
 /**
  * Resolve the caller's Groq key: verify their bearer token, read the encrypted
  * key from Supabase, and decrypt it server-side. The plaintext key never leaves
- * the server. Returns the key, or an error string for the caller to surface.
+ * the server. Also returns the verified admin client + user id so the caller can
+ * read the user's brand voice without a second auth round-trip.
  */
 async function resolveGroqKey(
   req: NextRequest,
-): Promise<{ groqKey: string } | { error: string; status: number }> {
+): Promise<{ groqKey: string; db: SupabaseClient; userId: string } | { error: string; status: number }> {
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
     return { error: "Server is missing SUPABASE_SERVICE_ROLE_KEY.", status: 500 };
   }
@@ -48,7 +50,25 @@ async function resolveGroqKey(
   if (!stored) {
     return { error: "missing_key", status: 400 };
   }
-  return { groqKey: decrypt(stored).trim() };
+  return { groqKey: decrypt(stored).trim(), db, userId: userData.user.id };
+}
+
+/**
+ * Read the user's saved Brand Voice and turn it into a tone instruction for the
+ * Groq system prompt. Defensive: any failure (columns not yet migrated, no row)
+ * falls back to the neutral Balanced voice so generation never breaks.
+ */
+async function resolveVoiceInstruction(db: SupabaseClient, userId: string): Promise<string> {
+  try {
+    const { data } = await db
+      .from("profiles")
+      .select("brand_voice, brand_voice_custom")
+      .eq("id", userId)
+      .maybeSingle();
+    return buildVoiceInstruction(data?.brand_voice, data?.brand_voice_custom);
+  } catch {
+    return buildVoiceInstruction(DEFAULT_BRAND_VOICE, null);
+  }
 }
 
 export interface ContentKit {
@@ -85,11 +105,14 @@ export async function POST(req: NextRequest) {
     if ("error" in keyResult) {
       return NextResponse.json({ error: keyResult.error }, { status: keyResult.status });
     }
-    const { groqKey } = keyResult;
+    const { groqKey, db, userId } = keyResult;
 
     if (!topic?.trim()) {
       return NextResponse.json({ error: "Topic is required" }, { status: 400 });
     }
+
+    // The user's Brand Voice shapes the tone of every field the model returns.
+    const voiceInstruction = await resolveVoiceInstruction(db, userId);
 
     const safeWordCount = Number.isFinite(wordCount) ? Math.round(wordCount) : 150;
     const prompt = buildPrompt(
@@ -111,7 +134,10 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           model: GROQ_MODEL,
-          messages: [{ role: "user", content: prompt }],
+          messages: [
+            { role: "system", content: `You are a viral content strategist. ${voiceInstruction}` },
+            { role: "user", content: prompt },
+          ],
           temperature: 0.85,
           max_tokens: 6144,
           response_format: { type: "json_object" },
