@@ -50,7 +50,7 @@ async function authorize(
   return { db, userId: data.user.id };
 }
 
-/** Return the caller's own Groq key, decrypted, so Settings can prefill it. */
+/** Return the caller's own Groq and YouTube keys, decrypted, so Settings can prefill them. */
 export async function GET(req: NextRequest) {
   const auth = await authorize(req);
   if ("error" in auth) return auth.error;
@@ -59,21 +59,23 @@ export async function GET(req: NextRequest) {
   try {
     const { data, error } = await db
       .from("api_keys")
-      .select("groq_key")
+      .select("groq_key, youtube_api_key")
       .eq("user_id", userId)
       .maybeSingle();
     if (error) throw error;
 
-    const stored = data?.groq_key;
-    const groqKey = stored ? decrypt(stored) : "";
-    return NextResponse.json({ groqKey });
+    const storedGroq = data?.groq_key;
+    const storedYt = data?.youtube_api_key;
+    const groqKey = storedGroq ? decrypt(storedGroq) : "";
+    const youtubeApiKey = storedYt ? decrypt(storedYt) : "";
+    return NextResponse.json({ groqKey, youtubeApiKey });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to load key";
+    const message = err instanceof Error ? err.message : "Failed to load keys";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
-/** Encrypt and store the caller's Groq key. */
+/** Encrypt and store the caller's Groq and/or YouTube keys. */
 export async function POST(req: NextRequest) {
   const auth = await authorize(req);
   if ("error" in auth) return auth.error;
@@ -81,17 +83,27 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const groqKey = typeof body.groqKey === "string" ? body.groqKey.trim() : "";
+    const payload: { user_id: string; groq_key?: string; youtube_api_key?: string } = {
+      user_id: userId,
+    };
 
-    const stored = groqKey ? encrypt(groqKey) : "";
+    if (typeof body.groqKey === "string") {
+      const trimmed = body.groqKey.trim();
+      payload.groq_key = trimmed ? encrypt(trimmed) : "";
+    }
+    if (typeof body.youtubeApiKey === "string") {
+      const trimmed = body.youtubeApiKey.trim();
+      payload.youtube_api_key = trimmed ? encrypt(trimmed) : "";
+    }
+
     const { error } = await db
       .from("api_keys")
-      .upsert({ user_id: userId, groq_key: stored }, { onConflict: "user_id" });
+      .upsert(payload, { onConflict: "user_id" });
     if (error) throw error;
 
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to save key";
+    const message = err instanceof Error ? err.message : "Failed to save keys";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

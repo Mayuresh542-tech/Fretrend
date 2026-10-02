@@ -1,415 +1,499 @@
 "use client";
+
 import { useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { supabase } from "../lib/supabase";
-import { useAuthGate } from "../lib/useAuthGate";
 import { useRouter } from "next/navigation";
-import Sidebar from "../components/Sidebar";
-import AnimatedBackground from "../components/AnimatedBackground";
+import Link from "next/link";
+import {
+  Compass,
+  FileText,
+  Video,
+  Mic,
+  Film,
+  Image as ImageIcon,
+  FolderKanban,
+  MoreVertical,
+  Play,
+  ArrowRight,
+  Plus,
+  Sparkles,
+  Layers,
+  Clock,
+} from "lucide-react";
+import StudioShell from "../components/StudioShell";
 import AuthLoadingScreen from "../components/AuthLoadingScreen";
-import CountUp from "../components/CountUp";
-import OnboardingFlow from "../components/OnboardingFlow";
-import { useAlertCount } from "../lib/alerts";
+import { useAuthGate } from "../lib/useAuthGate";
+import { getProjects, deleteProject } from "../lib/services/projectService";
+import { VeeloxProject } from "../lib/services/types";
+import CreateProjectModal from "../components/projects/CreateProjectModal";
 
-interface TrendItem {
-  title: string;
-  source: string;
-  trendScore: number;
-  category: string;
-  url?: string;
-}
-
-interface UserStats {
-  searches: number;
-  generated: number;
-  saved: number;
-  topNiche: string | null;
-}
-
-interface ActivityItem {
-  id: string;
-  topic: string;
-  niche: string | null;
-  created_at: string;
-}
-
-const SOURCE_DOT: Record<string, string> = {
-  "Google Trends": "bg-blue-400",
-  HackerNews: "bg-orange-400",
-  Reddit: "bg-red-400",
-  YouTube: "bg-rose-400",
-  "Google News": "bg-teal-400",
-};
-
-function scoreColor(score: number) {
-  if (score >= 80) return "from-rose-500 to-orange-400";
-  if (score >= 60) return "from-orange-400 to-amber-300";
-  return "from-emerald-500 to-teal-400";
-}
-
-function timeAgo(iso: string): string {
-  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
-/** Pick the most frequent non-empty value from a list. */
-function mostCommon(values: (string | null)[]): string | null {
-  const counts = new Map<string, number>();
-  for (const v of values) {
-    const key = (v ?? "").trim();
-    if (!key) continue;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  let best: string | null = null;
-  let bestCount = 0;
-  for (const [key, count] of counts) {
-    if (count > bestCount) {
-      best = key;
-      bestCount = count;
-    }
-  }
-  return best;
-}
+const DEFAULT_RECENT_PROJECTS = [
+  {
+    id: "proj_demo_1",
+    title: "5 AI Tools You Need in 2026",
+    status: "Completed",
+    timeAgo: "2 hours ago",
+    thumbnail: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500&auto=format&fit=crop&q=60",
+    duration: "0:45",
+    assetCount: 6,
+  },
+  {
+    id: "proj_demo_2",
+    title: "Productivity Hacks for Remote Teams",
+    status: "In Progress",
+    timeAgo: "5 hours ago",
+    thumbnail: "https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=500&auto=format&fit=crop&q=60",
+    duration: "0:30",
+    assetCount: 4,
+  },
+  {
+    id: "proj_demo_3",
+    title: "The Death of the Traditional Pipeline",
+    status: "Completed",
+    timeAgo: "1 day ago",
+    thumbnail: "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=500&auto=format&fit=crop&q=60",
+    duration: "1:00",
+    assetCount: 8,
+  },
+  {
+    id: "proj_demo_4",
+    title: "Coding With Autonomous Agents",
+    status: "Draft",
+    timeAgo: "1 day ago",
+    thumbnail: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=500&auto=format&fit=crop&q=60",
+    duration: "0:15",
+    assetCount: 2,
+  },
+];
 
 export default function Dashboard() {
   const router = useRouter();
-  const [topTrends, setTopTrends] = useState<TrendItem[]>([]);
-  const [trendsLoading, setTrendsLoading] = useState(true);
-
-  const [stats, setStats] = useState<UserStats>({ searches: 0, generated: 0, saved: 0, topNiche: null });
-  const [activity, setActivity] = useState<ActivityItem[]>([]);
-  const [statsLoading, setStatsLoading] = useState(true);
   const { status, session } = useAuthGate();
+  const [projects, setProjects] = useState<VeeloxProject[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(true);
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-  // Bell badge: total trends across saved niches (computed by /alerts).
-  const alertCount = useAlertCount();
-
-  // Redirect only once the gate has resolved and found no session.
+  // Redirect if unauthenticated
+  const redirectedRef = useRef(false);
   useEffect(() => {
-    if (status === "unauthed") router.replace("/login");
+    if (status === "unauthed" && !redirectedRef.current) {
+      redirectedRef.current = true;
+      router.replace("/login");
+    }
   }, [status, router]);
 
-  // Load stats once, as soon as we're authed.
-  const statsLoadedRef = useRef(false);
+  // Load real user projects
   useEffect(() => {
-    if (status !== "authed" || !session || statsLoadedRef.current) return;
-    statsLoadedRef.current = true;
-
+    if (status !== "authed" || !session) return;
     const userId = session.user.id;
-    (async () => {
-      const [searchCount, kitCount, niches, recent] = await Promise.all([
-        supabase.from("searches").select("*", { count: "exact", head: true }).eq("user_id", userId),
-        supabase.from("content_kits").select("*", { count: "exact", head: true }).eq("user_id", userId),
-        supabase.from("content_kits").select("niche").eq("user_id", userId),
-        supabase
-          .from("content_kits")
-          .select("id, topic, niche, created_at")
-          .eq("user_id", userId)
-          .order("created_at", { ascending: false })
-          .limit(5),
-      ]);
-
-      const kits = kitCount.count ?? 0;
-      setStats({
-        searches: searchCount.count ?? 0,
-        generated: kits,
-        saved: kits,
-        topNiche: mostCommon((niches.data ?? []).map((r: { niche: string | null }) => r.niche)),
+    getProjects(userId)
+      .then((userProjects) => {
+        setProjects(userProjects || []);
+      })
+      .catch((err) => {
+        console.error("Failed to load user projects:", err);
+      })
+      .finally(() => {
+        setLoadingProjects(false);
       });
-      setActivity((recent.data as ActivityItem[]) ?? []);
-      setStatsLoading(false);
-    })();
   }, [status, session]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadTopTrends() {
-      try {
-        const res = await fetch("/api/trends", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ niche: "technology" }),
-        });
-        const data = await res.json();
-        if (!cancelled && res.ok) setTopTrends((data.trends ?? []).slice(0, 5));
-      } catch {
-        // widget is best-effort; ignore failures
-      } finally {
-        if (!cancelled) setTrendsLoading(false);
-      }
-    }
-    loadTopTrends();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const STAT_CARDS = [
-    { icon: "🔎", to: stats.searches, label: "Trends Searched", accent: "from-purple-500/30 to-cyan-500/20" },
-    { icon: "✨", to: stats.generated, label: "Scripts Generated", accent: "from-cyan-500/30 to-purple-500/20" },
-    { icon: "💾", to: stats.saved, label: "Reports Saved", accent: "from-fuchsia-500/30 to-purple-500/20" },
-    { icon: "🏷️", text: stats.topNiche ?? "—", label: "Top Niche", accent: "from-purple-500/30 to-cyan-500/20" },
-  ];
-
-  // Hold the UI on a spinner until the gate resolves — never render the
-  // dashboard (or redirect) before the session check completes.
   if (status !== "authed") {
-    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
+    return <AuthLoadingScreen label="Opening Veelox Studio…" />;
   }
 
+  async function handleDeleteProject(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    try {
+      await deleteProject(id);
+      setProjects((prev) => prev.filter((p) => p.id !== id));
+      setActiveMenuId(null);
+    } catch (err) {
+      console.error("Failed to delete project:", err);
+    }
+  }
+
+  // Quick action tool definitions
+  const quickActions = [
+    {
+      title: "Find Trends",
+      description: "Discover rising topics with high viewer demand",
+      icon: Compass,
+      href: "/trends",
+      badge: "Discovery",
+    },
+    {
+      title: "Write Script",
+      description: "Generate viral spoken scripts & section hooks",
+      icon: FileText,
+      href: "/script",
+      badge: "AI Writer",
+    },
+    {
+      title: "Generate Voice",
+      description: "Studio narration with Voice.ai & ElevenLabs",
+      icon: Mic,
+      href: "/voice",
+      badge: "AI Audio",
+    },
+    {
+      title: "Upload Footage",
+      description: "Upload raw footage with scene & clip detection",
+      icon: Video,
+      href: "/raw-footage",
+      badge: "Raw Studio",
+    },
+    {
+      title: "Find B-Roll",
+      description: "Search high-impact stock cutaways & visuals",
+      icon: Film,
+      href: "/broll",
+      badge: "Assets",
+    },
+    {
+      title: "Create Thumbnail",
+      description: "High-CTR YouTube and social media designs",
+      icon: ImageIcon,
+      href: "/thumbnails",
+      badge: "Visuals",
+    },
+  ];
+
+  function formatTimeAgo(dateString?: string) {
+    if (!dateString) return "Recently";
+    const now = new Date();
+    const past = new Date(dateString);
+    const diffHours = Math.floor((now.getTime() - past.getTime()) / (1000 * 60 * 60));
+    if (diffHours < 1) return "Just now";
+    if (diffHours === 1) return "1 hour ago";
+    if (diffHours < 24) return `${diffHours} hours ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays === 1) return "1 day ago";
+    return `${diffDays} days ago`;
+  }
+
+  const displayProjects = projects.length > 0
+    ? projects.slice(0, 6).map((p) => {
+        const assetCount =
+          (p.raw_footage?.length || 0) +
+          (p.broll_assets?.length || 0) +
+          (p.voiceovers?.length || 0) +
+          (p.thumbnails?.length || 0) +
+          (p.scripts?.length || 0) +
+          (p.script ? 1 : 0);
+
+        return {
+          id: p.id,
+          title: p.title || "Untitled Project",
+          status:
+            p.status === "exported" || p.status === "ready"
+              ? "Completed"
+              : p.status === "rendering" || p.status === "editing"
+              ? "In Progress"
+              : "Draft",
+          timeAgo: formatTimeAgo(p.updated_at || p.created_at),
+          thumbnail:
+            p.thumbnail_url ||
+            "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500&auto=format&fit=crop&q=60",
+          duration: `${Math.round(p.duration || 30)}s`,
+          assetCount,
+          isReal: true,
+        };
+      })
+    : DEFAULT_RECENT_PROJECTS.map((p) => ({ ...p, isReal: false }));
+
   return (
-    <main className="relative min-h-screen text-white flex">
-      <AnimatedBackground />
-      {session && <OnboardingFlow userId={session.user.id} />}
-      <Sidebar active="dashboard" />
-
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.5 }}
-        className="lg:ml-64 flex-1 p-4 pt-20 lg:p-8 relative z-10"
-      >
-        {/* Animated gradient header */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-          className="flex justify-between items-center gap-3 mb-8"
-        >
-          <div>
-            <motion.h2
-              className="text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
-              style={{ backgroundSize: "200% auto" }}
-              animate={{ backgroundPosition: ["0% center", "200% center"] }}
-              transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
-            >
-              Dashboard
-            </motion.h2>
-            <p className="text-white/50 text-sm mt-1">Welcome back — the web is moving fast 👋</p>
+    <StudioShell active="dashboard">
+      <div className="space-y-10 pb-16 max-w-6xl mx-auto w-full">
+        {/* Section 25: Primary Video Creation Modes */}
+        <section className="space-y-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-slate-900" />
+              <span className="text-[11px] font-mono uppercase tracking-wider text-slate-500 font-semibold">
+                START CREATING
+              </span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
+              What are you creating?
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-500">
+              Choose your creation workflow. Veelox provides two dedicated pipelines for recorded footage vs faceless typography.
+            </p>
           </div>
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            <motion.a
-              href="/alerts"
-              whileHover={{ scale: 1.08 }}
-              whileTap={{ scale: 0.94 }}
-              title="Trend Alerts"
-              className="relative w-11 h-11 flex items-center justify-center rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition text-lg"
-            >
-              <motion.span
-                animate={alertCount > 0 ? { rotate: [0, -12, 12, -8, 8, 0] } : undefined}
-                transition={{ duration: 1.4, repeat: Infinity, repeatDelay: 3 }}
-              >
-                🔔
-              </motion.span>
-              {alertCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 min-w-5 px-1 h-5 flex items-center justify-center rounded-full text-[10px] font-bold bg-gradient-to-r from-purple-500 to-cyan-500 text-white">
-                  {alertCount > 99 ? "99+" : alertCount}
-                </span>
-              )}
-            </motion.a>
-            <motion.a
-              href="/trends"
-              whileHover={{ scale: 1.05, boxShadow: "0 0 30px -6px rgba(124,58,237,0.7)" }}
-              whileTap={{ scale: 0.96 }}
-              className="px-4 py-2.5 sm:px-6 sm:py-3 rounded-xl text-sm sm:text-base font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 whitespace-nowrap"
-            >
-              🔥 Explore Trends
-            </motion.a>
-          </div>
-        </motion.div>
 
-        {/* User stats */}
-        <motion.div
-          variants={{ show: { transition: { staggerChildren: 0.08 } } }}
-          initial="hidden"
-          animate="show"
-          className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 mb-8"
-        >
-          {STAT_CARDS.map((s) => (
-            <motion.div
-              key={s.label}
-              variants={{
-                hidden: { opacity: 0, y: 24 },
-                show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] } },
-              }}
-              whileHover={{ y: -6 }}
-              className={`group relative rounded-2xl p-px bg-gradient-to-br ${s.accent} transition-shadow hover:shadow-[0_0_34px_-8px_rgba(124,58,237,0.6)]`}
-            >
-              <div className="rounded-2xl bg-[#0c0c10]/85 backdrop-blur-xl p-4 sm:p-6 h-full">
-                <div className="text-2xl sm:text-3xl mb-2 sm:mb-3">{s.icon}</div>
-                <div className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-purple-300 to-cyan-300 bg-clip-text text-transparent mb-1 truncate" title={"text" in s ? s.text : undefined}>
-                  {statsLoading ? (
-                    <span className="text-white/20">…</span>
-                  ) : "text" in s ? (
-                    s.text
-                  ) : (
-                    <CountUp to={s.to} />
-                  )}
-                </div>
-                <div className="text-white/50 text-sm">{s.label}</div>
-              </div>
-            </motion.div>
-          ))}
-        </motion.div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Today's Top Trends widget */}
-          <motion.div
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.25, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            className="lg:col-span-2 relative rounded-2xl p-px bg-gradient-to-br from-purple-500/30 via-white/5 to-cyan-500/25"
-          >
-            <div className="rounded-2xl bg-[#0c0c10]/85 backdrop-blur-xl p-6 h-full">
-              <div className="flex items-center justify-between mb-5">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">🔥</span>
-                  <h3 className="text-lg font-bold">Today&apos;s Top Trends</h3>
-                  <span className="text-[10px] uppercase tracking-wider text-cyan-300 bg-cyan-500/10 border border-cyan-500/20 rounded-full px-2 py-0.5">
-                    Tech
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Mode A: Raw Footage */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col justify-between hover:border-slate-300 hover:shadow-xs transition-all group">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-900 group-hover:bg-slate-900 group-hover:text-white transition-colors">
+                    <Video className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200">
+                    Raw Footage Mode
                   </span>
                 </div>
-                <a href="/trends" className="text-sm text-purple-300 hover:text-purple-200 transition-colors">
-                  View all →
-                </a>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Raw Footage Video</h3>
+                  <p className="text-xs text-slate-600 font-medium mt-0.5">
+                    Turn your existing footage into a finished video.
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    Upload clips, extract speech transcripts, auto-remove silence, and match B-roll cutaways.
+                  </p>
+                </div>
               </div>
 
-              {trendsLoading ? (
-                <div className="flex flex-col gap-3">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className="relative overflow-hidden h-12 rounded-xl bg-white/5">
-                      <motion.div
-                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
-                        animate={{ x: ["-100%", "100%"] }}
-                        transition={{ duration: 1.3, repeat: Infinity, ease: "easeInOut", delay: i * 0.12 }}
-                      />
-                    </div>
-                  ))}
+              <div className="pt-5">
+                <Link
+                  href="/raw-footage"
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs flex items-center justify-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+                >
+                  <span>Start with Raw Footage</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            </div>
+
+            {/* Mode B: Typography Video */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col justify-between hover:border-slate-300 hover:shadow-xs transition-all group">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-900 group-hover:bg-slate-900 group-hover:text-white transition-colors">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200">
+                    Typography Mode
+                  </span>
                 </div>
-              ) : topTrends.length === 0 ? (
-                <p className="text-white/40 text-sm py-6 text-center">
-                  Live trend feed unavailable right now — open the Trends page to scan any niche.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {topTrends.map((t, i) => (
-                    <motion.div
-                      key={`${t.title}-${i}`}
-                      initial={{ opacity: 0, x: -16 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.35 + i * 0.08, duration: 0.4 }}
-                      whileHover={{ x: 4 }}
-                      className="group flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/5 hover:border-purple-500/30 transition-colors"
-                    >
-                      <span className="text-sm font-bold text-white/25 w-5 shrink-0 text-center">{i + 1}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate text-white/90">
-                          {t.url ? (
-                            <a href={t.url} target="_blank" rel="noopener noreferrer" className="hover:text-purple-300">
-                              {t.title}
-                            </a>
-                          ) : (
-                            t.title
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Typography Video</h3>
+                  <p className="text-xs text-slate-600 font-medium mt-0.5">
+                    Create a faceless, text-driven video from an idea or script.
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    Generate voiceovers, pick clean backdrops, and sync kinetic text reveals with audio punctuation.
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-5">
+                <Link
+                  href="/typography"
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs flex items-center justify-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+                >
+                  <span>Start Typography Video</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 25 & 26: Distinct Trend Finder Action */}
+          <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Compass className="w-4 h-4 text-slate-700" />
+                <span className="text-xs font-bold text-slate-900 uppercase font-mono">
+                  Trend Finder — &ldquo;What should I make?&rdquo;
+                </span>
+              </div>
+              <p className="text-xs text-slate-500">
+                Discover rising topics, analyze competitors, and draft viral hooks before creating.
+              </p>
+            </div>
+            <Link
+              href="/trends"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 text-xs font-medium transition-colors shadow-2xs shrink-0 cursor-pointer"
+            >
+              <span>Explore Trends</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+        </section>
+
+        {/* Secondary Quick Actions (Independent Creation Tools) */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wider font-mono">
+              Independent Creation Tools
+            </h2>
+            <span className="text-xs text-slate-400">
+              Pick any tool without a forced sequence
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {quickActions.map((action) => {
+              const Icon = action.icon;
+              return (
+                <Link
+                  key={action.title}
+                  href={action.href}
+                  className="bg-white rounded-xl border border-slate-200 p-4 hover:border-slate-300 hover:shadow-xs transition-all group flex items-start gap-3.5"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-slate-700 group-hover:text-blue-600 group-hover:bg-blue-50 transition-colors shrink-0">
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-1">
+                      <h3 className="text-sm font-semibold text-slate-900 group-hover:text-blue-600 transition-colors truncate">
+                        {action.title}
+                      </h3>
+                      <span className="text-[10px] font-mono text-slate-400 px-1.5 py-0.5 rounded bg-slate-50">
+                        {action.badge}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1 leading-snug line-clamp-2">
+                      {action.description}
+                    </p>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Recent Projects Hub */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">
+                Recent Projects
+              </h2>
+              <p className="text-xs text-slate-400">
+                Your content production workspaces and assembled timelines
+              </p>
+            </div>
+            <Link
+              href="/projects"
+              className="text-xs font-medium text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 transition-colors"
+            >
+              <span>View all projects</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {displayProjects.map((project) => {
+              const statusColor =
+                project.status === "Completed"
+                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                  : project.status === "In Progress"
+                  ? "bg-blue-50 text-blue-700 border-blue-200"
+                  : "bg-slate-100 text-slate-600 border-slate-200";
+
+              return (
+                <div
+                  key={project.id}
+                  onClick={() => router.push(`/projects/${project.id}`)}
+                  className="bg-white rounded-xl border border-slate-200 overflow-hidden hover:border-slate-300 hover:shadow-xs transition-all cursor-pointer group flex flex-col justify-between"
+                >
+                  {/* Thumbnail Banner */}
+                  <div className="relative aspect-video w-full bg-slate-900 overflow-hidden">
+                    <img
+                      src={project.thumbnail}
+                      alt={project.title}
+                      className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                    />
+                    <div className="absolute inset-0 bg-black/15 group-hover:bg-black/25 transition-colors flex items-center justify-center">
+                      <div className="w-8 h-8 rounded-full bg-white/90 shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Play className="w-3.5 h-3.5 text-slate-900 ml-0.5 fill-slate-900" />
+                      </div>
+                    </div>
+                    {project.duration && (
+                      <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[10px] font-mono text-white">
+                        {project.duration}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Project Details */}
+                  <div className="p-4 space-y-3 flex-1 flex flex-col justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-900 truncate group-hover:text-blue-600 transition-colors">
+                        {project.title}
+                      </h4>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${statusColor}`}>
+                          {project.status}
+                        </span>
+                        <span className="flex items-center gap-1 font-mono text-[11px] text-slate-500">
+                          <Layers className="w-3 h-3 text-slate-400" />
+                          {project.assetCount} {project.assetCount === 1 ? "asset" : "assets"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-400">
+                      <span>{project.timeAgo}</span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/editor?projectId=${project.id}`);
+                          }}
+                          className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-800 text-[11px] font-medium transition-colors cursor-pointer"
+                        >
+                          Open Editor
+                        </button>
+
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuId(activeMenuId === project.id ? null : project.id);
+                            }}
+                            className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                          >
+                            <MoreVertical className="w-3.5 h-3.5" />
+                          </button>
+
+                          {activeMenuId === project.id && (
+                            <div
+                              className="absolute right-0 bottom-6 w-32 bg-white rounded-lg border border-slate-200 shadow-md py-1 z-20 text-xs"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveMenuId(null);
+                                  router.push(`/projects/${project.id}`);
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-slate-50 transition-colors"
+                              >
+                                Project Detail
+                              </button>
+                              {project.isReal && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleDeleteProject(project.id, e)}
+                                  className="w-full text-left px-3 py-1.5 text-rose-600 hover:bg-rose-50 transition-colors"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
                           )}
-                        </p>
-                        <div className="flex items-center gap-1.5 mt-1">
-                          <span className={`w-1.5 h-1.5 rounded-full ${SOURCE_DOT[t.source] ?? "bg-white/40"}`} />
-                          <span className="text-[11px] text-white/40">{t.source}</span>
                         </div>
                       </div>
-                      <div className="w-24 shrink-0">
-                        <div className="flex justify-end text-xs font-bold text-white/50 mb-1">{t.trendScore}</div>
-                        <div className="h-1.5 w-full rounded-full bg-white/5 overflow-hidden">
-                          <motion.div
-                            className={`h-full rounded-full bg-gradient-to-r ${scoreColor(t.trendScore)}`}
-                            initial={{ width: 0 }}
-                            animate={{ width: `${t.trendScore}%` }}
-                            transition={{ delay: 0.45 + i * 0.08, duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </motion.div>
-
-          {/* Recent activity feed */}
-          <motion.div
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.35, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            className="relative rounded-2xl p-px bg-gradient-to-br from-cyan-500/30 via-white/5 to-purple-500/25"
-          >
-            <div className="rounded-2xl bg-[#0c0c10]/85 backdrop-blur-xl p-6 h-full">
-              <div className="flex items-center justify-between mb-5">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">🕒</span>
-                  <h3 className="text-lg font-bold">Recent Activity</h3>
-                </div>
-                <a href="/saved" className="text-sm text-purple-300 hover:text-purple-200 transition-colors">
-                  All →
-                </a>
-              </div>
-
-              {statsLoading ? (
-                <div className="flex flex-col gap-3">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="relative overflow-hidden h-12 rounded-xl bg-white/5">
-                      <motion.div
-                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
-                        animate={{ x: ["-100%", "100%"] }}
-                        transition={{ duration: 1.3, repeat: Infinity, ease: "easeInOut", delay: i * 0.12 }}
-                      />
                     </div>
-                  ))}
+                  </div>
                 </div>
-              ) : activity.length === 0 ? (
-                <div className="flex flex-col items-center justify-center text-center py-10">
-                  <div className="text-4xl mb-3">📝</div>
-                  <p className="text-white/40 text-sm mb-4">No content kits yet.</p>
-                  <a
-                    href="/trends"
-                    className="text-sm text-purple-300 hover:text-purple-200 transition-colors"
-                  >
-                    Generate your first →
-                  </a>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {activity.map((a, i) => (
-                    <motion.a
-                      key={a.id}
-                      href="/saved"
-                      initial={{ opacity: 0, x: -16 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.4 + i * 0.08, duration: 0.4 }}
-                      whileHover={{ x: 4 }}
-                      className="group flex items-start gap-3 p-3 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/5 hover:border-purple-500/30 transition-colors"
-                    >
-                      <span className="text-base shrink-0 mt-0.5">✨</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-white/90 truncate" title={a.topic}>
-                          {a.topic}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1">
-                          {a.niche && <span className="text-[11px] text-purple-300/80">#{a.niche}</span>}
-                          <span className="text-[11px] text-white/30">{timeAgo(a.created_at)}</span>
-                        </div>
-                      </div>
-                    </motion.a>
-                  ))}
-                </div>
-              )}
-            </div>
-          </motion.div>
-        </div>
-      </motion.div>
-    </main>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+
+      {/* Universal Create Project Modal */}
+      <CreateProjectModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+      />
+    </StudioShell>
   );
 }

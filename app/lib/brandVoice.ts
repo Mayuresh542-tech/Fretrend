@@ -68,8 +68,8 @@ export const BRAND_VOICES: BrandVoice[] = [
     label: "Inspirational",
     description: "Motivating, uplifting",
     icon: "✨",
-    gradient: "from-fuchsia-500/25 to-purple-500/10",
-    ring: "border-fuchsia-500/50",
+    gradient: "from-amber-500/25 to-orange-500/10",
+    ring: "border-amber-500/50",
     tone: "motivating, uplifting, and aspirational — energize the viewer and make them feel capable and excited to act",
   },
   {
@@ -77,8 +77,8 @@ export const BRAND_VOICES: BrandVoice[] = [
     label: "Balanced",
     description: "Default, neutral",
     icon: "⚖️",
-    gradient: "from-purple-500/25 to-cyan-500/10",
-    ring: "border-purple-500/50",
+    gradient: "from-sky-500/25 to-cyan-500/10",
+    ring: "border-sky-500/50",
     tone: "balanced and neutral — clear and engaging without leaning heavily in any one stylistic direction",
   },
 ];

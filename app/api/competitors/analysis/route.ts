@@ -1,51 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { decrypt } from "../../../lib/crypto";
+import { generateGeminiJson } from "../../../lib/server/geminiService";
 
-// Reads the caller's Authorization header to fetch their Groq key, so it must
-// always run dynamically at request time (never prerendered/cached).
 export const dynamic = "force-dynamic";
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.3-70b-versatile";
-
-function adminClient(): SupabaseClient {
-  return createClient(SUPABASE_URL!, SERVICE_ROLE_KEY!, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
-
-/**
- * Resolve the caller's Groq key: verify their bearer token, read the encrypted
- * key from Supabase, and decrypt it server-side. Mirrors the content-kit route.
- */
-async function resolveGroqKey(
-  req: NextRequest,
-): Promise<{ groqKey: string } | { error: string; status: number }> {
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-    return { error: "Server is missing SUPABASE_SERVICE_ROLE_KEY.", status: 500 };
-  }
-
-  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  if (!token) return { error: "Unauthorized", status: 401 };
-
-  const db = adminClient();
-  const { data: userData, error: userErr } = await db.auth.getUser(token);
-  if (userErr || !userData.user) return { error: "Unauthorized", status: 401 };
-
-  const { data } = await db
-    .from("api_keys")
-    .select("groq_key")
-    .eq("user_id", userData.user.id)
-    .maybeSingle();
-
-  const stored = data?.groq_key;
-  if (!stored) return { error: "missing_key", status: 400 };
-  return { groqKey: decrypt(stored).trim() };
-}
 
 export interface TitleFormula {
   formula: string;
@@ -64,38 +20,45 @@ interface VideoInput {
   channel?: string;
 }
 
-function buildPrompt(niche: string, videos: VideoInput[]): string {
+function buildPrompt(niche: string, videos: VideoInput[]): { prompt: string; systemInstruction: string } {
   const list = videos
-    .map((v, i) => `${i + 1}. "${String(v.title ?? "").trim()}" — ${Number(v.views ?? 0).toLocaleString()} views (${String(v.channel ?? "").trim()})`)
+    .map(
+      (v, i) =>
+        `${i + 1}. "${String(v.title ?? "").trim()}" — ${Number(
+          v.views ?? 0
+        ).toLocaleString()} views (${String(v.channel ?? "").trim()})`
+    )
     .join("\n");
+
   const avg = videos.length
     ? Math.round(videos.reduce((s, v) => s + Number(v.views ?? 0), 0) / videos.length)
     : 0;
 
-  return `You are an expert YouTube growth strategist performing competitor analysis for the "${niche}" niche.
+  const systemInstruction = `You are a world-class YouTube growth analyst and audience strategist for Veelox.
+Critical rules:
+1. Base your analysis STRICTLY on the actual video titles, channel names, and view counts provided below.
+2. Do NOT invent fake viewer statistics or fake retention curves.
+3. Deliver high-value, actionable strategic observations distinguishing between observed data and strategic recommendations.`;
 
-Here are the current top ${videos.length} videos in this niche, ranked by views:
+  const prompt = `Perform competitor analysis for the "${niche}" niche based on these top ${videos.length} videos:
+
 ${list}
 
-Average views across these videos: ${avg.toLocaleString()}.
+Average views across observed videos: ${avg.toLocaleString()}.
 
-Analyze the TITLES, channels, and view counts above, then return ONLY a JSON object with these EXACT fields:
-- "whatsWorking": array of 4-6 strings. Each is a specific, concrete insight about WHY these videos win — recurring title patterns, the hooks and emotional triggers competitors lean on, and the content formats/angles that clearly attract views. Reference patterns you actually observe in the titles above.
-- "contentGaps": array of 4-6 strings. Each names a specific topic, sub-niche, audience, or angle that these top videos are NOT covering = an opportunity the user could own. Be concrete and actionable, not generic.
-- "titleFormulas": array of 4-6 objects, each shaped { "formula": string, "example": string }. "formula" is a reusable winning title template distilled from the videos (e.g. "How to [achieve X]", "[Number] [things] every [audience] needs", "Why [surprising claim]"). "example" is a ready-to-use title for the "${niche}" niche that follows that exact formula.
+Analyze the patterns above and return ONLY a JSON object with these EXACT fields:
+- "whatsWorking": array of 4-6 strings. Specific, concrete insights about WHY these videos succeed — recurring title triggers, emotional anchors, and format hooks observable in the titles above.
+- "contentGaps": array of 4-6 strings. Specific underserved topics, angles, or questions that these competitors are NOT addressing — prime opportunities for a new creator to own.
+- "titleFormulas": array of 4-6 objects shaped { "formula": string, "example": string }. "formula" is a reusable winning pattern distilled from the data. "example" is an original, ready-to-use title for the "${niche}" niche following that formula.
 
-Return STRICTLY valid JSON with no markdown fences and no commentary.`;
+Return STRICTLY valid JSON with no markdown fences and no conversational commentary.`;
+
+  return { prompt, systemInstruction };
 }
 
 export async function POST(req: NextRequest) {
   try {
     const { niche, videos } = await req.json();
-
-    const keyResult = await resolveGroqKey(req);
-    if ("error" in keyResult) {
-      return NextResponse.json({ error: keyResult.error }, { status: keyResult.status });
-    }
-    const { groqKey } = keyResult;
 
     const cleanNiche = String(niche ?? "").trim();
     const list: VideoInput[] = Array.isArray(videos) ? videos.slice(0, 10) : [];
@@ -103,81 +66,71 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Niche and videos are required." }, { status: 400 });
     }
 
-    const prompt = buildPrompt(cleanNiche, list);
+    const authHeader = req.headers.get("authorization") ?? "";
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim() || null;
 
-    let res: Response;
+    const { prompt, systemInstruction } = buildPrompt(cleanNiche, list);
+
     try {
-      res = await fetch(GROQ_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${groqKey}`,
-        },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.8,
-          max_tokens: 3072,
-          response_format: { type: "json_object" },
-        }),
-        signal: AbortSignal.timeout(30000),
+      const parsed = await generateGeminiJson<Record<string, any>>({
+        prompt,
+        systemInstruction,
+        temperature: 0.7,
+        operation: "competitor_analysis",
       });
-    } catch (err) {
-      if (err instanceof Error && err.name === "TimeoutError") {
-        return NextResponse.json({ error: "Groq timed out — try again." }, { status: 504 });
-      }
-      throw err;
-    }
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      if (res.status === 401) {
-        return NextResponse.json({ error: "invalid_key" }, { status: 401 });
+      const analysis: CompetitorAnalysis = {
+        whatsWorking: Array.isArray(parsed?.whatsWorking)
+          ? parsed.whatsWorking.map((s: any) => String(s)).filter(Boolean)
+          : [],
+        contentGaps: Array.isArray(parsed?.contentGaps)
+          ? parsed.contentGaps.map((s: any) => String(s)).filter(Boolean)
+          : [],
+        titleFormulas: Array.isArray(parsed?.titleFormulas)
+          ? parsed.titleFormulas
+              .map((f: any) => {
+                const obj = (f ?? {}) as Record<string, unknown>;
+                return {
+                  formula: String(obj.formula ?? "").trim(),
+                  example: String(obj.example ?? "").trim(),
+                };
+              })
+              .filter((f) => f.formula && f.example)
+          : [],
+      };
+
+      return NextResponse.json({ analysis });
+    } catch (aiErr: any) {
+      console.warn("[Competitors Analysis API] Gemini error:", aiErr.message);
+
+      if (process.env.NODE_ENV === "development") {
+        return NextResponse.json({
+          analysis: {
+            whatsWorking: [
+              `Curiosity-driven titles posing questions achieve 2.4x higher clickthrough in the ${cleanNiche} niche.`,
+              "Explicit timeframe challenges ('7 Days', '30 Days') dominate top search rankings.",
+              "Contrarian 'Why X is Wrong' hooks capture high comment velocity and repeat shares.",
+            ],
+            contentGaps: [
+              `Beginner-to-intermediate transition workflows are currently underserved.`,
+              `Objective budget benchmarks and cost comparisons have zero dedicated coverage in the top 10 results.`,
+              `Practical execution blueprints with zero theoretical fluff.`,
+            ],
+            titleFormulas: [
+              { formula: "Why [Established Authority] is Wrong About [Topic]", example: `Why 99% of People Are Wrong About ${cleanNiche}` },
+              { formula: "I Tested [Topic] for [Timeframe] (Here's What Happened)", example: `I Tested ${cleanNiche} for 30 Days (Real Numbers)` },
+              { formula: "The [Topic] Blueprint Nobody Wants You to Know", example: `The Complete ${cleanNiche} Roadmap for 2025` },
+            ],
+          },
+          isDevelopmentMode: true,
+        });
       }
-      if (res.status === 429) {
-        return NextResponse.json(
-          { error: "Groq rate limit hit — wait a moment and try again." },
-          { status: 429 },
-        );
-      }
+
       return NextResponse.json(
-        { error: "Groq request failed.", detail: detail.slice(0, 300) },
-        { status: res.status },
+        { error: "AI competitor analysis is temporarily unavailable. Please retry in a moment." },
+        { status: 503 }
       );
     }
-
-    const data = await res.json();
-    const content: string | undefined = data?.choices?.[0]?.message?.content;
-    if (!content) {
-      return NextResponse.json({ error: "Empty response from Groq." }, { status: 502 });
-    }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      return NextResponse.json({ error: "Groq returned malformed JSON — try again." }, { status: 502 });
-    }
-
-    // Normalize defensively — the model occasionally drifts from the schema.
-    const analysis: CompetitorAnalysis = {
-      whatsWorking: Array.isArray(parsed.whatsWorking)
-        ? parsed.whatsWorking.map((s) => String(s)).filter(Boolean)
-        : [],
-      contentGaps: Array.isArray(parsed.contentGaps)
-        ? parsed.contentGaps.map((s) => String(s)).filter(Boolean)
-        : [],
-      titleFormulas: Array.isArray(parsed.titleFormulas)
-        ? parsed.titleFormulas
-            .map((f) => {
-              const obj = (f ?? {}) as Record<string, unknown>;
-              return { formula: String(obj.formula ?? "").trim(), example: String(obj.example ?? "").trim() };
-            })
-            .filter((f) => f.formula)
-        : [],
-    };
-
-    return NextResponse.json({ analysis });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
     return NextResponse.json({ error: message }, { status: 500 });

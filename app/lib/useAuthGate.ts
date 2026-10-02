@@ -9,12 +9,11 @@ export type AuthStatus = "loading" | "authed" | "unauthed";
  * Client-side auth gate. Resolves the persisted Supabase session WITHOUT
  * redirecting prematurely.
  *
- * The subtlety this exists to handle: getSession() is async and, on a fresh
- * tab or a browser reopen, can resolve to `null` before the stored session has
- * finished hydrating / refreshing its (expired) access token. The real session
- * then arrives moments later via an onAuthStateChange event (INITIAL_SESSION /
- * TOKEN_REFRESHED). So we listen for that too, and callers must treat
- * "loading" as "don't redirect yet" — redirect only once we reach "unauthed".
+ * Auth state transitions:
+ *   "loading" (checking) -> "authed" (valid session verified)
+ *   "loading" (checking) -> "unauthed" (verified no session or signed out)
+ *
+ * Callers must treat "loading" as checking: never redirect while "loading".
  */
 export function useAuthGate(): { status: AuthStatus; session: Session | null } {
   const [status, setStatus] = useState<AuthStatus>("loading");
@@ -22,28 +21,42 @@ export function useAuthGate(): { status: AuthStatus; session: Session | null } {
 
   useEffect(() => {
     let mounted = true;
+    let hasResolvedSession = false;
 
-    supabase.auth.getSession().then(({ data, error }) => {
-      // TEMP DEBUG — remove once the redirect-on-reopen cause is confirmed.
-      console.log("[authgate] getSession →", { hasSession: !!data.session, error });
-      if (!mounted) return;
-      if (data.session?.user) {
-        setSession(data.session);
-        setStatus("authed");
-      } else {
-        setStatus("unauthed");
-      }
-    });
-
+    // 1. Subscribe to auth state changes as the primary reactive listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
-      // TEMP DEBUG — this is the line that will reveal a SIGNED_OUT fired by a
-      // failed token refresh (the suspected real cause of the bounce on reopen).
-      console.log("[authgate] onAuthStateChange →", event, { hasSession: !!s });
       if (!mounted) return;
+
       if (s?.user) {
+        hasResolvedSession = true;
         setSession(s);
         setStatus("authed");
       } else if (event === "SIGNED_OUT") {
+        hasResolvedSession = false;
+        setSession(null);
+        setStatus("unauthed");
+      } else if (event === "INITIAL_SESSION" && !s) {
+        if (!hasResolvedSession) {
+          setSession(null);
+          setStatus("unauthed");
+        }
+      }
+    });
+
+    // 2. Query getSession to resolve immediately from storage/memory
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      if (data?.session?.user) {
+        hasResolvedSession = true;
+        setSession(data.session);
+        setStatus("authed");
+      } else if (!hasResolvedSession) {
+        setSession(null);
+        setStatus("unauthed");
+      }
+    }).catch(() => {
+      if (!mounted) return;
+      if (!hasResolvedSession) {
         setSession(null);
         setStatus("unauthed");
       }
@@ -57,3 +70,4 @@ export function useAuthGate(): { status: AuthStatus; session: Session | null } {
 
   return { status, session };
 }
+

@@ -45,7 +45,7 @@ export default function BrandVoiceBadge({ className = "" }: { className?: string
       whileHover={{ scale: 1.04 }}
       whileTap={{ scale: 0.96 }}
       title="Change your Brand Voice in Settings"
-      className={`inline-flex items-center gap-1.5 rounded-full border border-purple-500/30 bg-purple-600/10 px-3 py-1 text-xs font-semibold text-purple-200 transition-colors hover:border-purple-400/50 hover:bg-purple-600/20 ${className}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-xs font-semibold text-sky-200 transition-colors hover:border-sky-400/50 hover:bg-sky-500/20 ${className}`}
     >
       <span aria-hidden>{display.icon}</span>
       <span className="text-white/40 font-medium">Voice</span>

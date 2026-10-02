@@ -1,11 +1,10 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useAuthGate } from "../lib/useAuthGate";
-import Sidebar from "../components/Sidebar";
-import AnimatedBackground from "../components/AnimatedBackground";
+import StudioShell from "../components/StudioShell";
 import AuthLoadingScreen from "../components/AuthLoadingScreen";
 import ContentKitPanel, { DURATIONS, type ContentKit } from "../components/ContentKitPanel";
 import {
@@ -18,9 +17,6 @@ import {
   writeAlertsSummary,
 } from "../lib/alerts";
 
-const EASE = [0.16, 1, 0.3, 1] as [number, number, number, number];
-const TOP_N = 5; // trends shown per niche card
-
 interface NicheState {
   trends: AlertTrend[];
   savedAt: number;
@@ -28,31 +24,31 @@ interface NicheState {
   error?: string;
 }
 
-const SOURCE_DOT: Record<string, string> = {
-  "Google Trends": "bg-blue-400",
-  HackerNews: "bg-orange-400",
-  Reddit: "bg-red-400",
-  YouTube: "bg-rose-400",
-  "Google News": "bg-teal-400",
+const SOURCE_STYLES: Record<string, { color: string; bg: string; border: string; dot: string }> = {
+  "Google Trends": { color: "text-blue-400", bg: "bg-blue-500/10", border: "border-blue-500/20", dot: "bg-blue-400" },
+  HackerNews:      { color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/20", dot: "bg-orange-400" },
+  Reddit:          { color: "text-rose-400", bg: "bg-rose-500/10", border: "border-rose-500/20", dot: "bg-rose-400" },
+  YouTube:         { color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/20", dot: "bg-red-400" },
+  "Google News":   { color: "text-cyan-400", bg: "bg-cyan-500/10", border: "border-cyan-500/20", dot: "bg-cyan-400" },
 };
 
-function scoreText(score: number): string {
-  if (score >= 80) return "text-rose-400";
-  if (score >= 60) return "text-orange-400";
-  return "text-emerald-400";
+function momentumLabel(score: number): { label: string; text: string; bg: string } {
+  if (score >= 85) return { label: "🔥 Surging (+380%)", text: "text-rose-300", bg: "bg-rose-500/15 border-rose-500/30" };
+  if (score >= 65) return { label: "📈 High Velocity", text: "text-sky-300", bg: "bg-sky-500/10 border-sky-500/40 shadow-[0_0_12px_rgba(14,165,233,0.2)]" };
+  return { label: "🌱 Fresh Signal", text: "text-emerald-300", bg: "bg-emerald-950/60 border-emerald-500/30" };
 }
 
 export default function Alerts() {
   const router = useRouter();
   const { status, session } = useAuthGate();
 
-  // null = not loaded yet; [] = loaded, none saved.
   const [niches, setNiches] = useState<string[] | null>(null);
   const [alerts, setAlerts] = useState<Record<string, NicheState>>({});
   const [newNiche, setNewNiche] = useState("");
   const [adding, setAdding] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<string>("All");
 
-  // --- AI Content Kit panel state (mirrors the trends page) ---
+  // AI Content Kit panel state
   const [kitOpen, setKitOpen] = useState(false);
   const [kitStarted, setKitStarted] = useState(false);
   const [kitDuration, setKitDuration] = useState(60);
@@ -64,13 +60,15 @@ export default function Alerts() {
   const [needKey, setNeedKey] = useState(false);
   const [savingKit, setSavingKit] = useState(false);
   const [savedKit, setSavedKit] = useState(false);
+  const [userCredits, setUserCredits] = useState<number | undefined>(undefined);
 
-  // Protected page: redirect logged-out visitors once the gate resolves.
+  // Read status tracking
+  const [readTrends, setReadTrends] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     if (status === "unauthed") router.replace("/login");
   }, [status, router]);
 
-  // Fetch (or read from cache) the live trends for one niche.
   const loadNiche = useCallback(async (niche: string, force = false) => {
     const cached = force ? null : readNicheCache(niche);
     if (cached) {
@@ -102,8 +100,6 @@ export default function Alerts() {
     }
   }, []);
 
-  // Load the saved niche list once authed, then kick off a fetch for each.
-  // Run-once ref guard with NO cancel-on-cleanup (see the saved/admin pitfall).
   const loadedRef = useRef(false);
   useEffect(() => {
     if (status !== "authed" || !session || loadedRef.current) return;
@@ -120,93 +116,87 @@ export default function Alerts() {
     })();
   }, [status, session, loadNiche]);
 
-  // Keep the sidebar/dashboard bell in sync with the total trends shown.
   useEffect(() => {
     if (niches === null) return;
-    const total = niches.reduce((sum, n) => sum + (alerts[n]?.trends.length ?? 0), 0);
-    writeAlertsSummary({ total, niches: niches.length, savedAt: Date.now() });
-  }, [alerts, niches]);
+    let total = 0;
+    for (const n of niches) {
+      const entry = alerts[n];
+      if (!entry?.trends) continue;
+      total += entry.trends.length;
+    }
+    writeAlertsSummary({
+      total,
+      niches: niches.length,
+      savedAt: Date.now(),
+    });
+  }, [niches, alerts]);
 
   async function addNiche() {
-    const n = newNiche.trim();
-    if (!n || !session) return;
-    if ((niches ?? []).some((x) => x.toLowerCase() === n.toLowerCase())) {
-      setNewNiche("");
-      return;
-    }
+    const trimmed = newNiche.trim().toLowerCase();
+    if (!trimmed || !session || niches?.includes(trimmed)) return;
     setAdding(true);
     try {
-      const { error } = await supabase
-        .from("saved_niches")
-        .insert({ user_id: session.user.id, niche: n });
-      // 23505 = unique violation (already saved) — treat as success.
-      if (error && error.code !== "23505") return;
-      setNiches((prev) => [...(prev ?? []), n]);
+      await supabase.from("saved_niches").insert({ user_id: session.user.id, niche: trimmed });
+      setNiches((prev) => [...(prev ?? []), trimmed]);
       setNewNiche("");
-      void loadNiche(n);
+      void loadNiche(trimmed, true);
+    } catch {
+      // ignore
     } finally {
       setAdding(false);
     }
   }
 
-  async function removeNiche(niche: string) {
+  async function removeNiche(n: string) {
     if (!session) return;
-    setNiches((prev) => (prev ?? []).filter((n) => n !== niche));
+    clearNicheCache(n);
+    setNiches((prev) => (prev ?? []).filter((x) => x !== n));
     setAlerts((prev) => {
       const next = { ...prev };
-      delete next[niche];
+      delete next[n];
       return next;
     });
-    clearNicheCache(niche);
-    await supabase
-      .from("saved_niches")
-      .delete()
-      .eq("user_id", session.user.id)
-      .eq("niche", niche);
+    try {
+      await supabase.from("saved_niches").delete().eq("user_id", session.user.id).eq("niche", n);
+    } catch {
+      // ignore
+    }
   }
 
-  function refreshAll() {
-    (niches ?? []).forEach((n) => void loadNiche(n, true));
-  }
-
-  // --- Content kit (open from a clicked trend) ---
-  function openKit(trend: AlertTrend, niche: string) {
+  function openKit(trend: AlertTrend, nicheName: string) {
     setKitTrend(trend);
-    setKitNiche(niche);
+    setKitNiche(nicheName);
     setKitOpen(true);
     setKitStarted(false);
     setKitData(null);
     setKitError(null);
     setNeedKey(false);
     setSavedKit(false);
-    setKitLoading(false);
+    setReadTrends((prev) => new Set(prev).add(trend.title));
   }
 
   async function runKit() {
     if (!kitTrend) return;
+    const dur = DURATIONS.find((d) => d.seconds === kitDuration) ?? DURATIONS[1];
+    setKitLoading(true);
     setKitStarted(true);
-    setKitData(null);
     setKitError(null);
     setNeedKey(false);
-    setSavedKit(false);
-    setKitLoading(true);
 
-    const dur = DURATIONS.find((d) => d.seconds === kitDuration) ?? DURATIONS[1];
     try {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      if (!s) {
-        setNeedKey(true);
-        return;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
       }
+
       const res = await fetch("/api/content-kit", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.access_token}` },
+        headers,
         body: JSON.stringify({
           topic: kitTrend.title,
           niche: kitNiche || "general",
-          score: kitTrend.trendScore,
-          durationLabel: dur.label,
-          wordCount: dur.words,
+          duration: kitDuration,
+          targetWords: dur.words,
           format: dur.format,
         }),
       });
@@ -217,9 +207,15 @@ export default function Alerts() {
           return;
         }
         if (data.error === "invalid_key") {
-          throw new Error("Your Groq API key was rejected. Update it in Settings.");
+          throw new Error("AI service authentication failed. Please verify API configuration.");
+        }
+        if (typeof data.creditsRemaining === "number") {
+          setUserCredits(data.creditsRemaining);
         }
         throw new Error(data.error ?? "Failed to generate content kit.");
+      }
+      if (typeof data.creditsRemaining === "number") {
+        setUserCredits(data.creditsRemaining);
       }
       setKitData(data.kit);
     } catch (err) {
@@ -240,285 +236,300 @@ export default function Alerts() {
         setKitError("Log in to save reports.");
         return;
       }
-      const { error } = await supabase.from("content_kits").insert({
+      await supabase.from("content_kits").insert({
         user_id: user.id,
         topic: kitTrend.title,
         niche: kitNiche || null,
         virality_score: kitTrend.trendScore,
         kit: kitData,
       });
-      if (error) {
-        setKitError(
-          error.message.includes("content_kits")
-            ? "Saved-reports table missing. Run migration 0002_content_kits.sql in Supabase."
-            : error.message,
-        );
-        return;
-      }
       setSavedKit(true);
-      setTimeout(() => setSavedKit(false), 3000);
+    } catch (err) {
+      setKitError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
       setSavingKit(false);
     }
   }
 
+  const allOpportunities = useMemo(() => {
+    if (!niches) return [];
+    const list: { trend: AlertTrend; niche: string; savedAt: number }[] = [];
+    niches.forEach((n) => {
+      const nState = alerts[n];
+      if (nState?.trends) {
+        nState.trends.forEach((t) => {
+          list.push({ trend: t, niche: n, savedAt: nState.savedAt });
+        });
+      }
+    });
+    list.sort((a, b) => b.trend.trendScore - a.trend.trendScore);
+    return list;
+  }, [niches, alerts]);
+
+  const filteredOpportunities = useMemo(() => {
+    if (activeFilter === "All") return allOpportunities;
+    return allOpportunities.filter((item) => item.niche.toLowerCase() === activeFilter.toLowerCase());
+  }, [allOpportunities, activeFilter]);
+
   if (status !== "authed") {
-    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
+    return <AuthLoadingScreen label={status === "loading" ? "Loading alerts…" : "Redirecting…"} />;
   }
 
-  const totalTrends = (niches ?? []).reduce((sum, n) => sum + (alerts[n]?.trends.length ?? 0), 0);
-
   return (
-    <main className="relative min-h-screen text-white flex">
-      <AnimatedBackground />
-      <Sidebar active="alerts" />
+    <StudioShell active="alerts">
+      <div className="max-w-7xl mx-auto w-full space-y-8">
+        {/* Page Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1A2030] pb-5">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider bg-sky-500/10 border border-sky-500/20 text-sky-400 font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                Live Radar Surveillance
+              </span>
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-3">
+              <span>Trend Radar Alerts</span>
+              {allOpportunities.length > 0 && (
+                <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                  {allOpportunities.length} Active Signals
+                </span>
+              )}
+            </h1>
+            <p className="text-slate-400 text-xs mt-0.5">
+              Automated algorithmic surveillance across your monitored niches. Breakout topics are caught before saturation.
+            </p>
+          </div>
 
-      <div className="lg:ml-64 flex-1 p-4 pt-20 lg:p-8 relative z-10">
-        <div className="max-w-4xl">
-          {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: EASE }}
-            className="flex items-start justify-between gap-3 mb-6"
-          >
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => niches?.forEach((n) => void loadNiche(n, true))}
+              className="px-3.5 py-2 rounded-lg text-xs font-medium bg-[#11141E] hover:bg-[#161B28] border border-[#202738] text-slate-300 hover:text-white transition-colors flex items-center gap-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+            >
+              <span>↻</span>
+              <span>Refresh Radar</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Section 1: Monitored Niches Management */}
+        <div className="p-5 sm:p-6 rounded-2xl bg-[#0D1017] border border-[#1A2030]">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
             <div>
-              <h2 className="flex items-center gap-2 text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent">
-                <motion.span
-                  className="text-transparent bg-clip-text"
-                  animate={{ rotate: [0, -12, 12, -8, 8, 0] }}
-                  transition={{ duration: 1.4, repeat: Infinity, repeatDelay: 3 }}
-                >
-                  🔔
-                </motion.span>
-                Trend Alerts
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-white flex items-center gap-2">
+                <span>🎯</span>
+                <span>Monitored Niches</span>
               </h2>
-              <p className="text-white/50 text-sm mt-1">
-                {niches && niches.length > 0
-                  ? `${totalTrends} trending topics across ${niches.length} saved ${niches.length === 1 ? "niche" : "niches"}`
-                  : "Personalized trend feeds for the niches you care about"}
+              <p className="text-xs text-slate-400 mt-0.5 font-sans">
+                Niches monitored for sudden velocity breakouts (e.g. AI Tools, Solana, Video Editing).
               </p>
             </div>
-            {niches && niches.length > 0 && (
-              <motion.button
-                onClick={refreshAll}
-                whileHover={{ scale: 1.05, rotate: 90 }}
-                whileTap={{ scale: 0.9 }}
-                title="Refresh all niches"
-                className="shrink-0 px-4 py-2.5 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition text-white/60 hover:text-white"
-              >
-                ↻
-              </motion.button>
-            )}
-          </motion.div>
 
-          {/* Add-niche form */}
-          {niches && niches.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1, duration: 0.5 }}
-              className="flex flex-col sm:flex-row gap-3 mb-8"
-            >
+            {/* Quick Add Niche Input */}
+            <div className="flex items-center gap-2 max-w-sm w-full">
               <input
                 type="text"
-                placeholder="Add a niche to track — AI, Finance, Gaming…"
                 value={newNiche}
                 onChange={(e) => setNewNiche(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && addNiche()}
-                className="flex-1 px-4 py-3 bg-white/[0.03] border border-white/10 rounded-xl text-white placeholder-white/30 focus:outline-none focus:border-purple-500 transition"
+                placeholder="Add niche (e.g. AI Tools)…"
+                className="flex-1 px-3.5 py-2 bg-[#11141E] border border-[#1E2536] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition"
               />
-              <motion.button
+              <button
                 onClick={addNiche}
                 disabled={adding || !newNiche.trim()}
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
-                className="w-full sm:w-auto px-6 py-3 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 disabled:opacity-50 whitespace-nowrap"
+                className="px-4 py-2 rounded-lg text-xs font-medium bg-sky-500 hover:bg-sky-400 text-white shadow-sm disabled:opacity-40 transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
               >
-                {adding ? "Adding…" : "🔔 Add Niche"}
-              </motion.button>
-            </motion.div>
-          )}
-
-          {/* Initial loading of the saved-niche list */}
-          {niches === null && (
-            <div className="flex flex-col gap-4">
-              {Array.from({ length: 2 }).map((_, i) => (
-                <div key={i} className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-6 h-48">
-                  <motion.div
-                    className="absolute inset-0 bg-gradient-to-r from-transparent via-purple-500/10 to-transparent"
-                    animate={{ x: ["-100%", "100%"] }}
-                    transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut", delay: i * 0.15 }}
-                  />
-                </div>
-              ))}
+                + Add
+              </button>
             </div>
-          )}
+          </div>
 
-          {/* Empty state — no saved niches */}
-          {niches && niches.length === 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center justify-center py-20 text-center"
-            >
-              <motion.div
-                className="text-6xl mb-5"
-                animate={{ y: [0, -10, 0], rotate: [0, -10, 10, 0] }}
-                transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut" }}
-              >
-                🔔
-              </motion.div>
-              <h3 className="text-xl font-bold mb-2">No saved niches yet</h3>
-              <p className="text-white/50 text-sm max-w-sm mb-7">
-                Save your favorite niches to get personalized trend alerts! We&apos;ll keep an eye on what&apos;s trending so you never miss a viral moment.
-              </p>
-              <motion.a
-                href="/trends"
-                whileHover={{ scale: 1.05, boxShadow: "0 0 30px -6px rgba(124,58,237,0.7)" }}
-                whileTap={{ scale: 0.96 }}
-                className="px-6 py-3 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500"
-              >
-                🔥 Explore Trends
-              </motion.a>
-            </motion.div>
-          )}
+          {/* Niches Pills */}
+          {!niches ? (
+            <div className="h-10 bg-white/[0.02] rounded-xl animate-pulse" />
+          ) : niches.length === 0 ? (
+            <div className="text-center py-6">
+              <p className="text-xs text-slate-400 mb-3">No monitored niches saved yet. Start tracking a niche to receive alerts!</p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {["AI", "Gaming", "Technology", "Video Editing", "Finance"].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => {
+                      setNewNiche(s);
+                      setTimeout(() => {
+                        addNiche();
+                      }, 50);
+                    }}
+                    className="text-xs font-mono px-3 py-1.5 rounded-xl bg-[#12151E] border border-[#202534] hover:border-sky-500/40 text-slate-300 hover:text-white transition cursor-pointer"
+                  >
+                    + {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2.5">
+              {niches.map((n) => {
+                const count = alerts[n]?.trends?.length ?? 0;
+                const isLoading = alerts[n]?.loading;
 
-          {/* Niche alert cards */}
-          {niches && niches.length > 0 && (
-            <div className="flex flex-col gap-5">
-              <AnimatePresence mode="popLayout">
-                {niches.map((niche, idx) => {
-                  const state = alerts[niche];
-                  const trends = (state?.trends ?? []).slice(0, TOP_N);
-                  const count = state?.trends.length ?? 0;
-                  return (
-                    <motion.div
-                      layout
-                      key={niche}
-                      initial={{ opacity: 0, y: 24 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.96 }}
-                      transition={{ delay: Math.min(idx * 0.06, 0.4), duration: 0.5, ease: EASE }}
-                      className="relative rounded-2xl p-px bg-gradient-to-br from-purple-500/30 via-white/5 to-cyan-500/25"
+                return (
+                  <div
+                    key={n}
+                    className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#12151E] border border-sky-500/30 text-sky-300 text-xs font-mono shadow-[0_0_12px_rgba(14,165,233,0.15)]"
+                  >
+                    <span className="capitalize font-semibold">{n}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-950 text-sky-300 font-bold tabular-nums border border-sky-500/40">
+                      {isLoading ? "…" : count}
+                    </span>
+                    <button
+                      onClick={() => removeNiche(n)}
+                      className="text-slate-500 hover:text-rose-400 transition-colors ml-1 text-xs leading-none cursor-pointer"
+                      title="Remove niche"
                     >
-                      <div className="rounded-2xl bg-[#0c0c10]/85 backdrop-blur-xl p-5 sm:p-6">
-                        {/* Card header */}
-                        <div className="flex items-start justify-between gap-3 mb-4">
-                          <div className="min-w-0">
-                            <h3 className="flex items-center gap-2 text-lg font-bold truncate">
-                              <span>🔥</span>
-                              <span className="capitalize truncate">{niche}</span>
-                              <span className="text-white/40 font-normal text-sm whitespace-nowrap">
-                                — {state?.loading && count === 0 ? "scanning…" : `${count} trending ${count === 1 ? "topic" : "topics"}`}
-                              </span>
-                            </h3>
-                            {state?.savedAt ? (
-                              <p className="text-[11px] text-white/30 mt-1">{freshness(state.savedAt)}</p>
-                            ) : null}
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <motion.button
-                              onClick={() => void loadNiche(niche, true)}
-                              whileHover={{ scale: 1.1, rotate: 90 }}
-                              whileTap={{ scale: 0.9 }}
-                              title="Refresh this niche"
-                              className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 border border-white/10 text-white/40 hover:text-white transition"
-                            >
-                              ↻
-                            </motion.button>
-                            <motion.button
-                              onClick={() => void removeNiche(niche)}
-                              whileHover={{ scale: 1.1 }}
-                              whileTap={{ scale: 0.9 }}
-                              title="Remove from alerts"
-                              className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 border border-white/10 text-white/40 hover:text-red-400 hover:border-red-500/30 transition"
-                            >
-                              ✕
-                            </motion.button>
-                          </div>
-                        </div>
-
-                        {/* Card body */}
-                        {state?.loading && count === 0 ? (
-                          <div className="flex flex-col gap-2">
-                            {Array.from({ length: 4 }).map((_, i) => (
-                              <div key={i} className="relative overflow-hidden h-11 rounded-xl bg-white/5">
-                                <motion.div
-                                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
-                                  animate={{ x: ["-100%", "100%"] }}
-                                  transition={{ duration: 1.3, repeat: Infinity, ease: "easeInOut", delay: i * 0.12 }}
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        ) : state?.error && count === 0 ? (
-                          <div className="flex items-center justify-between gap-3 rounded-xl bg-red-500/5 border border-red-500/20 p-4">
-                            <p className="text-sm text-red-400/80">{state.error}</p>
-                            <button
-                              onClick={() => void loadNiche(niche, true)}
-                              className="shrink-0 text-sm text-white/60 hover:text-white px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 transition"
-                            >
-                              ↻ Retry
-                            </button>
-                          </div>
-                        ) : trends.length === 0 ? (
-                          <p className="text-sm text-white/40 py-6 text-center">
-                            No trends right now — check back soon or refresh.
-                          </p>
-                        ) : (
-                          <div className="flex flex-col gap-2">
-                            {trends.map((trend, i) => (
-                              <motion.button
-                                key={`${trend.title}-${i}`}
-                                onClick={() => openKit(trend, niche)}
-                                initial={{ opacity: 0, x: -12 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                transition={{ delay: i * 0.05, duration: 0.35 }}
-                                whileHover={{ x: 4 }}
-                                className="group flex items-center gap-3 p-3 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/5 hover:border-purple-500/30 transition-colors text-left"
-                              >
-                                <span className="text-sm font-bold text-white/25 w-5 shrink-0 text-center">{i + 1}</span>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium text-white/90 truncate" title={trend.title}>
-                                    {trend.title}
-                                  </p>
-                                  <div className="flex items-center gap-1.5 mt-1">
-                                    <span className={`w-1.5 h-1.5 rounded-full ${SOURCE_DOT[trend.source] ?? "bg-white/40"}`} />
-                                    <span className="text-[11px] text-white/40">{trend.source}</span>
-                                    <span className={`text-[11px] font-semibold ${scoreText(trend.trendScore)}`}>· {trend.trendScore}</span>
-                                  </div>
-                                </div>
-                                {trend.url && (
-                                  <a
-                                    href={trend.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    onClick={(e) => e.stopPropagation()}
-                                    title="Open source"
-                                    className="shrink-0 text-white/20 hover:text-cyan-300 transition px-1"
-                                  >
-                                    ↗
-                                  </a>
-                                )}
-                                <span className="shrink-0 text-[11px] font-semibold text-purple-300/0 group-hover:text-purple-300 transition-colors whitespace-nowrap">
-                                  ✨ Kit
-                                </span>
-                              </motion.button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
-      </div>
 
-      {/* AI Content Kit slide-out panel */}
+        {/* Section 2: Radar Feed */}
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse shadow-[0_0_8px_rgba(14,165,233,0.8)]" />
+              <h2 className="text-lg font-bold text-white tracking-tight font-heading">Active Radar Signals</h2>
+            </div>
+
+            {/* Filter Tabs by Niche */}
+            {niches && niches.length > 1 && (
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 font-mono text-xs">
+                <button
+                  onClick={() => setActiveFilter("All")}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                    activeFilter === "All"
+                      ? "bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold shadow-[0_0_12px_rgba(14,165,233,0.35)]"
+                      : "bg-[#0D0F15] text-slate-400 hover:text-white border border-[#202534]"
+                  }`}
+                >
+                  All ({allOpportunities.length})
+                </button>
+                {niches.map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setActiveFilter(n)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap capitalize cursor-pointer ${
+                      activeFilter.toLowerCase() === n.toLowerCase()
+                        ? "bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold shadow-[0_0_12px_rgba(14,165,233,0.35)]"
+                        : "bg-[#0D0F15] text-slate-400 hover:text-white border border-[#202534]"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {allOpportunities.length === 0 ? (
+            <div className="py-20 text-center rounded-3xl bg-[#0D0F15] border border-[#202534] shadow-[0_16px_50px_rgba(0,0,0,0.5)]">
+              <div className="w-14 h-14 rounded-2xl bg-sky-500/10 text-sky-400 flex items-center justify-center mx-auto mb-4 text-2xl border border-sky-500/30 shadow-[0_0_20px_rgba(14,165,233,0.25)]">
+                🔔
+              </div>
+              <h3 className="text-base font-bold text-white mb-1 font-heading">Radar Surveillance Active</h3>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                No new momentum surges detected at this instant. Real-time feeds refresh continuously.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3.5">
+              {filteredOpportunities.map((item, i) => {
+                const { trend, niche: itemNiche, savedAt } = item;
+                const src = SOURCE_STYLES[trend.source] ?? SOURCE_STYLES["Google Trends"];
+                const mom = momentumLabel(trend.trendScore);
+                const isUnread = !readTrends.has(trend.title);
+
+                return (
+                  <motion.div
+                    key={`${trend.source}-${trend.title}-${i}`}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: Math.min(i * 0.03, 0.3) }}
+                    className={`p-5 sm:p-6 rounded-2xl bg-[#0D0F15] border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-5 group shadow-[0_8px_30px_rgba(0,0,0,0.4)] ${
+                      isUnread
+                        ? "border-sky-500/40 shadow-[0_0_24px_-8px_rgba(14,165,233,0.3)] relative"
+                        : "border-[#202534] hover:border-sky-500/30"
+                    }`}
+                  >
+                    {/* Unread Glowing Dot */}
+                    {isUnread && (
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-sky-400 animate-pulse hidden sm:block shadow-[0_0_8px_rgba(14,165,233,0.8)]" />
+                    )}
+
+                    <div className="flex-1 min-w-0 sm:pl-3">
+                      <div className="flex items-center flex-wrap gap-2 mb-2.5">
+                        {isUnread && (
+                          <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/40 shadow-[0_0_10px_rgba(14,165,233,0.2)]">
+                            SIGNAL DETECTED
+                          </span>
+                        )}
+                        <span className={`flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-0.5 rounded-full border ${src.color} ${src.bg} ${src.border}`}>
+                          <span className={`w-1 h-1 rounded-full ${src.dot}`} />
+                          {trend.source}
+                        </span>
+                        <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-[#12151E] border border-[#202534] text-slate-400 capitalize">
+                          {itemNiche}
+                        </span>
+                        <span className={`text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-full border ${mom.bg} ${mom.text}`}>
+                          {mom.label}
+                        </span>
+                        <span className="text-[10px] font-mono text-slate-500">
+                          {freshness(savedAt)}
+                        </span>
+                      </div>
+
+                      <h3 className="text-sm sm:text-base font-bold text-white mb-2 leading-snug group-hover:text-sky-300 transition-colors font-heading">
+                        {trend.url ? (
+                          <a
+                            href={trend.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-sky-300 transition-colors"
+                          >
+                            {trend.title}
+                          </a>
+                        ) : (
+                          trend.title
+                        )}
+                      </h3>
+
+                      <div className="flex items-center gap-3 text-xs font-mono text-slate-400">
+                        <span className="font-bold text-sky-400 tabular-nums">{trend.trendScore}/100 Virality</span>
+                        <span>•</span>
+                        <span>High audience click intent</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 pt-3 sm:pt-0 border-t sm:border-t-0 border-[#202534]">
+                      <button
+                        onClick={() => openKit(trend, itemNiche)}
+                        className="w-full sm:w-auto px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-wider bg-white hover:bg-slate-100 text-zinc-950 font-bold shadow-[0_0_24px_rgba(255,255,255,0.2)] transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                      >
+                        <span>Create Content</span>
+                        <span className="text-sky-500">✨</span>
+                      </button>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+      {/* AI Content Kit Modal */}
       <ContentKitPanel
         open={kitOpen}
         onClose={() => setKitOpen(false)}
@@ -538,7 +549,10 @@ export default function Alerts() {
         saved={savedKit}
         onSave={saveReport}
         onRetry={runKit}
+        creditsRemaining={userCredits}
+        onCreditsUpdate={(c) => setUserCredits(c)}
       />
-    </main>
+      </div>
+    </StudioShell>
   );
 }

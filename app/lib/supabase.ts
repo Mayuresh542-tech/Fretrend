@@ -39,7 +39,8 @@ const secureFlag = () =>
 function readCookies(): Map<string, string> {
   const jar = new Map<string, string>()
   if (typeof document === 'undefined' || !document.cookie) return jar
-  for (const pair of document.cookie.split('; ')) {
+  for (const raw of document.cookie.split(';')) {
+    const pair = raw.trim()
     const eq = pair.indexOf('=')
     if (eq === -1) continue
     jar.set(pair.slice(0, eq), pair.slice(eq + 1))
@@ -62,6 +63,7 @@ function clearChunks(key: string): void {
 
 const cookieStorage = {
   getItem(key: string): string | null {
+    if (typeof document === 'undefined') return null
     const jar = readCookies()
     let encoded = ''
     let chunkCount = 0
@@ -72,58 +74,22 @@ const cookieStorage = {
       chunkCount++
     }
 
+    // If no chunked cookies found, check for non-chunked legacy/direct cookie
     if (chunkCount === 0) {
-      // TEMP DEBUG — remove once the reopen cause is confirmed. If this fires on
-      // reopen for 'fretrend-auth', the chunks didn't survive the restart at all.
-      if (key === 'fretrend-auth') {
-        console.log('[cookieStorage.getItem] no chunks for', key, '— cookie names present:', [...jar.keys()])
+      const bare = jar.get(key)
+      if (!bare) return null
+      try {
+        return decodeURIComponent(bare)
+      } catch {
+        return bare
       }
-      return null
     }
 
-    let decoded: string | null = null
-    let decodeError: unknown = null
     try {
-      decoded = decodeURIComponent(encoded)
-    } catch (e) {
-      // A throw here means the reassembled value has a malformed %-sequence,
-      // which in practice means a chunk is missing/truncated (e.g. trailing
-      // chunk dropped) — i.e. a real dechunking problem, not just bad JSON.
-      decodeError = e
+      return decodeURIComponent(encoded)
+    } catch {
+      return encoded
     }
-
-    // TEMP DEBUG — this is the line that distinguishes the three reopen failure
-    // modes: (a) decodeOk=false → missing/truncated chunk; (b) decodeOk=true but
-    // jsonParseOk=false → corrupted value (auth-js discards it WITHOUT clearing
-    // the cookie, so it "persists but doesn't restore"); (c) both ok but
-    // expired=true → the session is fine and the bounce is a failed token
-    // refresh, not storage. Remove once confirmed.
-    if (key === 'fretrend-auth') {
-      let jsonParseOk = false
-      let expiresInfo: string | null = null
-      if (decoded !== null) {
-        try {
-          const s = JSON.parse(decoded)
-          jsonParseOk = true
-          if (s?.expires_at) {
-            const secs = s.expires_at - Math.floor(Date.now() / 1000)
-            expiresInfo = `${secs}s left (${secs < 0 ? 'EXPIRED' : 'valid'})`
-          }
-        } catch {
-          /* jsonParseOk stays false */
-        }
-      }
-      console.log('[cookieStorage.getItem]', key, {
-        chunkCount,
-        encodedLen: encoded.length,
-        decodeOk: decodeError === null,
-        decodeError: decodeError ? String(decodeError) : null,
-        jsonParseOk,
-        expiresInfo,
-      })
-    }
-
-    return decoded
   },
 
   setItem(key: string, value: string): void {

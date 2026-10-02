@@ -1,70 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { decrypt } from "../../lib/crypto";
 import { buildVoiceInstruction, DEFAULT_BRAND_VOICE } from "../../lib/brandVoice";
+import { generateGeminiJson } from "../../lib/server/geminiService";
 
-// Reads the caller's Authorization header to fetch their Groq key, so it must
-// always run dynamically at request time (never prerendered/cached).
 export const dynamic = "force-dynamic";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.3-70b-versatile";
-
-function adminClient(): SupabaseClient {
-  return createClient(SUPABASE_URL!, SERVICE_ROLE_KEY!, {
+function adminClient(): SupabaseClient | null {
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return null;
+  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
 
-/**
- * Resolve the caller's Groq key: verify their bearer token, read the encrypted
- * key from Supabase, and decrypt it server-side. Mirrors the content-kit route,
- * also returning the verified client + user id so the caller can read the user's
- * brand voice without a second auth round-trip.
- */
-async function resolveGroqKey(
-  req: NextRequest,
-): Promise<{ groqKey: string; db: SupabaseClient; userId: string } | { error: string; status: number }> {
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-    return { error: "Server is missing SUPABASE_SERVICE_ROLE_KEY.", status: 500 };
-  }
-
-  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  if (!token) return { error: "Unauthorized", status: 401 };
+async function resolveVoiceInstruction(token?: string | null): Promise<{ voiceInstruction: string; userId: string | null }> {
+  if (!token) return { voiceInstruction: buildVoiceInstruction(DEFAULT_BRAND_VOICE, null), userId: null };
 
   const db = adminClient();
-  const { data: userData, error: userErr } = await db.auth.getUser(token);
-  if (userErr || !userData.user) return { error: "Unauthorized", status: 401 };
+  if (!db) return { voiceInstruction: buildVoiceInstruction(DEFAULT_BRAND_VOICE, null), userId: null };
 
-  const { data } = await db
-    .from("api_keys")
-    .select("groq_key")
-    .eq("user_id", userData.user.id)
-    .maybeSingle();
-
-  const stored = data?.groq_key;
-  if (!stored) return { error: "missing_key", status: 400 };
-  return { groqKey: decrypt(stored).trim(), db, userId: userData.user.id };
-}
-
-/**
- * Read the user's saved Brand Voice and turn it into a tone instruction for the
- * Groq system prompt. Defensive: any failure falls back to the neutral Balanced
- * voice so platform repurposing never breaks. Mirrors the content-kit route.
- */
-async function resolveVoiceInstruction(db: SupabaseClient, userId: string): Promise<string> {
   try {
+    const { data: userData, error: userErr } = await db.auth.getUser(token);
+    if (userErr || !userData.user) {
+      return { voiceInstruction: buildVoiceInstruction(DEFAULT_BRAND_VOICE, null), userId: null };
+    }
+    const userId = userData.user.id;
     const { data } = await db
       .from("profiles")
       .select("brand_voice, brand_voice_custom")
       .eq("id", userId)
       .maybeSingle();
-    return buildVoiceInstruction(data?.brand_voice, data?.brand_voice_custom);
+
+    return {
+      voiceInstruction: buildVoiceInstruction(data?.brand_voice, data?.brand_voice_custom),
+      userId,
+    };
   } catch {
-    return buildVoiceInstruction(DEFAULT_BRAND_VOICE, null);
+    return { voiceInstruction: buildVoiceInstruction(DEFAULT_BRAND_VOICE, null), userId: null };
   }
 }
 
@@ -79,8 +53,6 @@ interface PlatformSpec {
   guidance: string;
 }
 
-/** Per-platform output contract handed to Groq. Keep labels stable — the UI
- *  renders whatever sections come back, but these match the product spec. */
 const PLATFORM_SPECS: Record<string, PlatformSpec> = {
   youtube: {
     name: "YouTube",
@@ -121,27 +93,9 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
   },
 };
 
-function buildPrompt(topic: string, niche: string, score: number, spec: PlatformSpec): string {
-  return `You are a platform-native content strategist. Repurpose this trending topic specifically for ${spec.name}.
-
-Topic: "${topic}"
-Niche: ${niche}
-Virality score: ${score}/100
-
-${spec.guidance}
-
-Match ${spec.name}'s native style, tone, ideal length, and best practices EXACTLY — content written for one platform should never read like it was copied from another. Return ONLY a JSON object shaped { "sections": [ ... ] } containing the sections described above, in that order. Every section must have "label" (string), "kind" ("text" or "list"), and "value" (a string for "text", an array of strings for "list"). No markdown fences and no commentary.`;
-}
-
 export async function POST(req: NextRequest) {
   try {
     const { topic, niche, score, platform } = await req.json();
-
-    const keyResult = await resolveGroqKey(req);
-    if ("error" in keyResult) {
-      return NextResponse.json({ error: keyResult.error }, { status: keyResult.status });
-    }
-    const { groqKey, db, userId } = keyResult;
 
     const cleanTopic = String(topic ?? "").trim();
     if (!cleanTopic) {
@@ -152,104 +106,72 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unknown platform" }, { status: 400 });
     }
 
-    // The user's Brand Voice shapes the tone of the repurposed content.
-    const voiceInstruction = await resolveVoiceInstruction(db, userId);
+    const authHeader = req.headers.get("authorization") ?? "";
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim() || null;
+    const { voiceInstruction, userId } = await resolveVoiceInstruction(token);
 
-    const prompt = buildPrompt(
-      cleanTopic,
-      String(niche ?? "").trim() || "general",
-      Number.isFinite(score) ? Math.round(score) : 0,
-      spec,
-    );
+    const systemInstruction = `You are a platform-native content strategist. ${voiceInstruction} Keep this brand voice while respecting each platform's native format, length, and best practices.`;
 
-    let res: Response;
+    const prompt = `Repurpose this trending topic specifically for ${spec.name}:
+Topic: "${cleanTopic}"
+Niche: ${niche || "general"}
+Virality score: ${Number.isFinite(score) ? Math.round(score) : 80}/100
+
+${spec.guidance}
+
+Return ONLY a JSON object shaped { "sections": [ ... ] }. Every section must have "label" (string), "kind" ("text" or "list"), and "value" (a string for "text", an array of strings for "list"). No markdown fences.`;
+
     try {
-      res = await fetch(GROQ_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${groqKey}`,
-        },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          messages: [
-            {
-              role: "system",
-              content: `You are a platform-native content strategist. ${voiceInstruction} Keep this brand voice while still respecting each platform's native format, length, and best practices.`,
-            },
-            { role: "user", content: prompt },
-          ],
-          temperature: 0.85,
-          max_tokens: 4096,
-          response_format: { type: "json_object" },
-        }),
-        signal: AbortSignal.timeout(30000),
+      const parsed = await generateGeminiJson<{ sections: any[] }>({
+        prompt,
+        systemInstruction,
+        temperature: 0.75,
+        userId,
+        operation: `platform_repurpose_${platform}`,
       });
-    } catch (err) {
-      if (err instanceof Error && err.name === "TimeoutError") {
-        return NextResponse.json({ error: "Groq timed out — try again." }, { status: 504 });
-      }
-      throw err;
-    }
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      if (res.status === 401) {
-        return NextResponse.json({ error: "invalid_key" }, { status: 401 });
-      }
-      if (res.status === 429) {
-        return NextResponse.json(
-          { error: "Groq rate limit hit — wait a moment and try again." },
-          { status: 429 },
-        );
-      }
-      return NextResponse.json(
-        { error: "Groq request failed.", detail: detail.slice(0, 300) },
-        { status: res.status },
-      );
-    }
-
-    const data = await res.json();
-    const content: string | undefined = data?.choices?.[0]?.message?.content;
-    if (!content) {
-      return NextResponse.json({ error: "Empty response from Groq." }, { status: 502 });
-    }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      return NextResponse.json({ error: "Groq returned malformed JSON — try again." }, { status: 502 });
-    }
-
-    // Normalize defensively — coerce each section to a clean text/list shape.
-    const rawSections = Array.isArray(parsed.sections) ? parsed.sections : [];
-    const sections: PlatformSection[] = rawSections
-      .map((s) => {
-        const obj = (s ?? {}) as Record<string, unknown>;
-        const label = String(obj.label ?? "").trim();
-        const kind: "text" | "list" = obj.kind === "list" ? "list" : "text";
-        let value: string | string[];
-        if (kind === "list") {
-          value = Array.isArray(obj.value)
-            ? obj.value.map((v) => String(v).trim()).filter(Boolean)
-            : obj.value
+      const rawSections = Array.isArray(parsed?.sections) ? parsed.sections : [];
+      const sections: PlatformSection[] = rawSections
+        .map((s) => {
+          const obj = (s ?? {}) as Record<string, unknown>;
+          const label = String(obj.label ?? "").trim();
+          const kind: "text" | "list" = obj.kind === "list" ? "list" : "text";
+          let value: string | string[];
+          if (kind === "list") {
+            value = Array.isArray(obj.value)
+              ? obj.value.map((v) => String(v).trim()).filter(Boolean)
+              : obj.value
               ? [String(obj.value).trim()]
               : [];
-        } else {
-          value = Array.isArray(obj.value)
-            ? obj.value.map((v) => String(v)).join("\n")
-            : String(obj.value ?? "").trim();
-        }
-        return { label, kind, value };
-      })
-      .filter((s) => s.label && (Array.isArray(s.value) ? s.value.length > 0 : s.value.length > 0));
+          } else {
+            value = Array.isArray(obj.value)
+              ? obj.value.map((v) => String(v)).join("\n")
+              : String(obj.value ?? "").trim();
+          }
+          return { label, kind, value };
+        })
+        .filter((s) => s.label && (Array.isArray(s.value) ? s.value.length > 0 : s.value.length > 0));
 
-    if (sections.length === 0) {
-      return NextResponse.json({ error: "Groq returned no usable content — try again." }, { status: 502 });
+      return NextResponse.json({ sections });
+    } catch (aiErr: any) {
+      console.warn("[Platform Kit API] Gemini error:", aiErr.message);
+
+      if (process.env.NODE_ENV === "development") {
+        return NextResponse.json({
+          sections: [
+            { label: "Headline Hook", kind: "text", value: `How ${cleanTopic} is taking over ${spec.name}` },
+            { label: "Core Takeaway", kind: "text", value: `Creators in ${niche || "tech"} are leveraging this shift to build massive engagement.` },
+            { label: "Suggested Hashtags", kind: "list", value: [`#${niche || "trending"}`, `#${cleanTopic.replace(/\s+/g, "")}`, "#VeeloxAI"] },
+          ],
+          isDevelopmentMode: true,
+        });
+      }
+
+      return NextResponse.json(
+        { error: "Platform repurposing is temporarily unavailable. Please retry." },
+        { status: 503 }
+      );
     }
-
-    return NextResponse.json({ platform: String(platform), sections });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -1,82 +1,80 @@
 "use client";
+
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
+import { BRAND_VOICES, DEFAULT_BRAND_VOICE } from "../lib/brandVoice";
 
 const EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
 interface StepMeta {
   emoji: string;
+  tag: string;
   title: string;
-  /** Soft glow color behind the emoji badge. */
-  glow: string;
+  desc: string;
 }
 
 const STEPS: StepMeta[] = [
-  { emoji: "🎉", title: "Welcome to Fretrend!", glow: "rgba(168,85,247,0.45)" },
-  { emoji: "⚡", title: "Get Your FREE Groq Key", glow: "rgba(34,197,94,0.40)" },
-  { emoji: "🔒", title: "Your Data Is Safe", glow: "rgba(6,182,212,0.40)" },
-  { emoji: "⚙️", title: "Add Your Key", glow: "rgba(124,58,237,0.45)" },
-  { emoji: "🚀", title: "You're All Set!", glow: "rgba(217,70,239,0.45)" },
-];
-
-const GROQ_STEPS: { n: number; label: React.ReactNode }[] = [
   {
-    n: 1,
-    label: (
-      <>
-        Go to{" "}
-        <a
-          href="https://console.groq.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-semibold text-cyan-300 underline decoration-cyan-400/40 underline-offset-2 hover:text-cyan-200"
-        >
-          console.groq.com
-        </a>
-      </>
-    ),
+    emoji: "⚡",
+    tag: "DISCOVER INTELLIGENCE",
+    title: "Welcome to Veelox",
+    desc: "The AI creator platform that turns live trend signals into fully edited, publish-ready videos.",
   },
-  { n: 2, label: "Sign up — it's free" },
-  { n: 3, label: "Click API Keys" },
-  { n: 4, label: "Create API Key" },
-  { n: 5, label: "Copy it" },
+  {
+    emoji: "🎯",
+    tag: "CALIBRATE RADAR",
+    title: "Select your primary niche",
+    desc: "We will prioritize breaking signals and keyword velocity feeds matched to your audience domain.",
+  },
+  {
+    emoji: "🎭",
+    tag: "CREATOR SIGNATURE",
+    title: "Select your AI brand voice",
+    desc: "Injected into every generated hook, title, and script to match your authentic personality.",
+  },
+  {
+    emoji: "⚡",
+    tag: "AI BRAIN PRE-CONFIGURED",
+    title: "Google Gemini 2.0 Engine",
+    desc: "Veelox automatically handles AI generation server-side. No API keys needed.",
+  },
+  {
+    emoji: "🚀",
+    tag: "CALIBRATION COMPLETE",
+    title: "Your studio is primed",
+    desc: "Your trend radar and custom brand voice are configured. Ready to turn breakout trends into viral content.",
+  },
 ];
 
-// Slide-and-fade between steps; direction flips depending on Back/Next.
-const cardVariants = {
-  enter: (dir: number) => ({ opacity: 0, x: dir > 0 ? 48 : -48 }),
-  center: { opacity: 1, x: 0 },
-  exit: (dir: number) => ({ opacity: 0, x: dir > 0 ? -48 : 48 }),
-};
+const NICHES = [
+  "AI & Automation",
+  "Gaming & Esports",
+  "Technology & Gadgets",
+  "Finance & Crypto",
+  "Video Editing & Filmmaking",
+  "Entertainment & Pop Culture",
+  "Productivity & SaaS",
+  "Fitness & Longevity",
+];
 
-/**
- * First-run welcome flow. Shown exactly once — the very first time a newly
- * signed-up user lands on the dashboard — then never again. Completion is
- * persisted to `profiles.onboarding_completed` (migration 0006); skipping also
- * marks it complete so it doesn't reappear. Requires the caller to be authed
- * and pass the user's id.
- */
 export default function OnboardingFlow({ userId }: { userId: string }) {
   const router = useRouter();
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(0);
-  const [direction, setDirection] = useState(1);
   const [finishing, setFinishing] = useState(false);
+
+  // Selections
+  const [selectedNiche, setSelectedNiche] = useState("AI & Automation");
+  const [selectedVoice, setSelectedVoice] = useState(DEFAULT_BRAND_VOICE);
 
   const last = STEPS.length - 1;
 
-  // Decide whether to show the flow — exactly once. We only open it when we can
-  // positively read an incomplete profile row; any error (table missing, no row,
-  // network) silently leaves it closed so existing users are never interrupted.
-  // NOTE: run-once ref guard with NO cancel-on-cleanup — pairing the two stalls
-  // the effect (see the saved/admin auth pitfall).
   const checkedRef = useRef(false);
   useEffect(() => {
     if (checkedRef.current) return;
     checkedRef.current = true;
-    console.log("[OnboardingFlow] mounted — checking profile for", userId);
     (async () => {
       try {
         const { data, error } = await supabase
@@ -84,41 +82,26 @@ export default function OnboardingFlow({ userId }: { userId: string }) {
           .select("onboarding_completed")
           .eq("id", userId)
           .maybeSingle();
-        console.log("[OnboardingFlow] profile check →", { data, error });
 
-        if (error) {
-          // Table missing or query blocked — we can't decide, so stay closed.
-          console.warn("[OnboardingFlow] profile query failed, not showing:", error.message);
-          return;
-        }
+        if (error) return;
 
         if (!data) {
-          // No profile row yet → this is a first run. We do NOT rely on the DB
-          // signup trigger (it may not be installed); create the row here and
-          // show onboarding. ignoreDuplicates avoids clobbering a row that a
-          // concurrent run/trigger may have just inserted.
-          console.log("[OnboardingFlow] no profile row → creating one + showing onboarding");
-          const { error: insErr } = await supabase
+          await supabase
             .from("profiles")
             .upsert({ id: userId, onboarding_completed: false }, { onConflict: "id", ignoreDuplicates: true });
-          if (insErr) console.warn("[OnboardingFlow] could not create profile row:", insErr.message);
           setVisible(true);
           return;
         }
 
         if (data.onboarding_completed === false) {
-          console.log("[OnboardingFlow] onboarding incomplete → showing");
           setVisible(true);
-        } else {
-          console.log("[OnboardingFlow] onboarding already completed → not showing");
         }
-      } catch (e) {
-        console.warn("[OnboardingFlow] profile check threw, not showing:", e);
+      } catch {
+        // ignore
       }
     })();
   }, [userId]);
 
-  // Lock background scroll while the modal is open.
   useEffect(() => {
     if (!visible) return;
     const prev = document.body.style.overflow;
@@ -129,7 +112,6 @@ export default function OnboardingFlow({ userId }: { userId: string }) {
   }, [visible]);
 
   function goTo(next: number) {
-    setDirection(next > step ? 1 : -1);
     setStep(next);
   }
 
@@ -137,14 +119,23 @@ export default function OnboardingFlow({ userId }: { userId: string }) {
     try {
       await supabase
         .from("profiles")
-        .update({ onboarding_completed: true })
+        .update({
+          onboarding_completed: true,
+          brand_voice: selectedVoice,
+        })
         .eq("id", userId);
+
+      // Save niche
+      if (selectedNiche) {
+        await supabase
+          .from("saved_niches")
+          .insert({ user_id: userId, niche: selectedNiche });
+      }
     } catch {
-      /* best effort — the flow is dismissed regardless */
+      // best-effort
     }
   }
 
-  // Finish the flow: persist completion, then either navigate away or just close.
   async function finish(destination?: string) {
     if (finishing) return;
     setFinishing(true);
@@ -157,9 +148,23 @@ export default function OnboardingFlow({ userId }: { userId: string }) {
     }
   }
 
-  const ctaLabel = ["Get Started", "Continue", "Continue", "Continue", "Explore Trends →"][step];
+  async function handlePrimary() {
+    if (step === 1 && selectedNiche) {
+      try {
+        await supabase.from("saved_niches").insert({ user_id: userId, niche: selectedNiche });
+      } catch {
+        // ignore
+      }
+    }
 
-  function handlePrimary() {
+    if (step === 2 && selectedVoice) {
+      try {
+        await supabase.from("profiles").update({ brand_voice: selectedVoice }).eq("id", userId);
+      } catch {
+        // ignore
+      }
+    }
+
     if (step === last) {
       void finish("/trends");
     } else {
@@ -167,215 +172,241 @@ export default function OnboardingFlow({ userId }: { userId: string }) {
     }
   }
 
+  const ctaLabel = [
+    "Begin Setup →",
+    "Confirm Niche →",
+    "Lock Brand Voice →",
+    "Confirm AI Engine →",
+    "Launch Trend Radar 🔥",
+  ][step];
+
   function renderBody() {
     switch (step) {
       case 0:
         return (
-          <p className="text-white/60 leading-relaxed">
-            You&apos;re now part of the future of content creation! Let&apos;s get you set up in{" "}
-            <span className="font-semibold text-white">2 minutes</span>.
-          </p>
-        );
-      case 1:
-        return (
-          <div className="flex flex-col items-center gap-5">
-            <span className="inline-flex items-center gap-2 rounded-full border border-green-400/30 bg-green-500/10 px-4 py-1.5 text-sm font-semibold text-green-300">
-              ✅ 100% FREE — No credit card. Ever.
-            </span>
-
-            <ol className="w-full flex flex-col gap-2.5 text-left">
-              {GROQ_STEPS.map((s) => (
-                <li key={s.n} className="flex items-center gap-3 text-sm text-white/75">
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 text-xs font-bold text-white">
-                    {s.n}
-                  </span>
-                  <span>{s.label}</span>
-                </li>
-              ))}
-            </ol>
-
-            <p className="w-full rounded-xl border border-purple-500/20 bg-purple-600/10 px-4 py-3 text-left text-xs text-purple-200">
-              💡 Generous free limits — hundreds of content kits per day, free!
+          <div className="space-y-4 max-w-md mx-auto text-left">
+            <p className="text-white/60 text-xs sm:text-sm leading-relaxed text-center">
+              Veelox replaces guesswork with continuous market intelligence. Track velocity, understand why audiences care, and generate fully edited videos in minutes.
             </p>
-          </div>
-        );
-      case 2:
-        return (
-          <div className="flex flex-col items-center gap-4">
-            <p className="text-white/60 leading-relaxed">
-              Your API key is protected with{" "}
-              <span className="font-semibold text-cyan-300">AES-256 encryption</span> — the same
-              standard banks use. Only <span className="font-semibold text-white">YOU</span> can
-              access it. Not even our team can see it.
-            </p>
-            <div className="flex flex-wrap justify-center gap-2">
-              {["🔐 AES-256", "🛡️ Bank-grade", "🙈 Private to you"].map((chip) => (
-                <span
-                  key={chip}
-                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/60"
-                >
-                  {chip}
-                </span>
-              ))}
+            <div className="p-4 rounded-xl bg-sky-500/10 border border-sky-500/20 text-xs text-sky-200/90 space-y-2.5 font-medium">
+              <div className="flex items-center gap-2.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                <span>Multi-Source Trend Discovery (Google Trends, Reddit, HN, YouTube)</span>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                <span>Instant AI Content Kits tailored to your unique voice tone</span>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                <span>1-Click Omni-Channel Repurposing (YouTube, TikTok, Reels, X, LinkedIn)</span>
+              </div>
             </div>
           </div>
         );
-      case 3:
+
+      case 1:
         return (
-          <div className="flex flex-col items-center gap-5">
-            <p className="text-white/60 leading-relaxed">
-              Add your free Groq key in{" "}
-              <span className="font-semibold text-white">Settings</span> to unlock AI Content Kits.
-            </p>
-            <motion.button
-              onClick={() => void finish("/settings")}
-              disabled={finishing}
-              whileHover={{ scale: 1.02, boxShadow: "0 0 26px -8px rgba(124,58,237,0.7)" }}
-              whileTap={{ scale: 0.98 }}
-              className="w-full rounded-xl bg-gradient-to-r from-purple-600 to-cyan-500 py-3 font-semibold text-white transition disabled:opacity-50"
-            >
-              Go to Settings →
-            </motion.button>
+          <div className="space-y-3 max-w-md mx-auto text-left">
+            <div className="grid grid-cols-2 gap-2">
+              {NICHES.map((n) => {
+                const isSelected = selectedNiche === n;
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setSelectedNiche(n)}
+                    className={`p-3 rounded-xl border text-xs font-semibold text-left transition flex items-center justify-between ${
+                      isSelected
+                        ? "bg-sky-500/20 border-sky-500/60 text-white shadow-[0_0_15px_-4px_rgba(14,165,233,0.3)]"
+                        : "bg-white/[0.02] border-white/[0.06] text-white/60 hover:text-white hover:bg-white/[0.04]"
+                    }`}
+                  >
+                    <span className="truncate">{n}</span>
+                    {isSelected && <span className="w-2 h-2 rounded-full bg-sky-400 shrink-0 ml-1.5" />}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         );
+
+      case 2:
+        return (
+          <div className="space-y-3 max-w-md mx-auto text-left">
+            <div className="grid grid-cols-2 gap-2">
+              {BRAND_VOICES.map((b) => {
+                const isSelected = selectedVoice === b.id;
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => setSelectedVoice(b.id)}
+                    className={`p-3 rounded-xl border transition text-left flex flex-col justify-between ${
+                      isSelected
+                        ? "bg-sky-500/20 border-sky-500/60 text-white shadow-[0_0_15px_-4px_rgba(14,165,233,0.3)]"
+                        : "bg-white/[0.02] border-white/[0.06] text-white/60 hover:text-white hover:bg-white/[0.04]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-lg">{b.icon}</span>
+                      {isSelected && <span className="w-2 h-2 rounded-full bg-sky-400" />}
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-white block">{b.label}</span>
+                      <span className="text-[10px] text-white/40 block truncate mt-0.5">{b.description}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+
+      case 3:
+        return (
+          <div className="space-y-3 max-w-md mx-auto text-left">
+            <div className="p-4 rounded-xl bg-sky-500/10 border border-sky-500/25 text-xs text-white/90 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-sky-300">Veelox AI Engine</span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Google Gemini 2.0 Active
+                </span>
+              </div>
+              <p className="text-[11px] text-white/70 leading-relaxed">
+                Veelox connects server-side to Google Gemini 2.0 to synthesize trend data into viral hooks, high-CTR titles, thumbnail concepts, and complete scripts.
+              </p>
+              <div className="pt-2 border-t border-white/[0.08] grid grid-cols-2 gap-2 text-[10px] font-mono text-white/60">
+                <div>✓ Zero Key Setup Required</div>
+                <div>✓ Server-Side Security</div>
+                <div>✓ Multi-Source Trend Data</div>
+                <div>✓ Omni-Channel Content Kit</div>
+              </div>
+            </div>
+            <p className="text-[11px] text-white/40 text-center font-mono">
+              30 free credits available on your starter tier.
+            </p>
+          </div>
+        );
+
       case 4:
         return (
-          <p className="text-white/60 leading-relaxed">
-            Start discovering <span className="font-semibold text-white">viral trends</span> and
-            generating content that gets <span className="font-semibold text-white">millions of views</span>!
-          </p>
+          <div className="space-y-4 max-w-md mx-auto text-left">
+            <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.08] text-xs space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-white/40 font-mono text-[11px]">TARGET NICHE</span>
+                <span className="font-semibold text-white font-mono">{selectedNiche}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-white/40 font-mono text-[11px]">BRAND VOICE</span>
+                <span className="font-semibold text-sky-300 font-mono capitalize">{selectedVoice}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-white/40 font-mono text-[11px]">ACCESS LEVEL</span>
+                <span className="font-bold text-emerald-400 font-mono flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Community Pro (Lifetime Free)
+                </span>
+              </div>
+            </div>
+            <p className="text-xs text-white/60 text-center leading-relaxed">
+              Click below to jump directly into the Trend Discovery engine and start turning breakout insights into viral content.
+            </p>
+          </div>
         );
+
       default:
         return null;
     }
   }
 
+  if (!visible) return null;
+
   return (
     <AnimatePresence>
-      {visible && (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md antialiased"
+      >
         <motion.div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          initial={{ opacity: 0, scale: 0.96, y: 16 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.96, y: 16 }}
+          transition={{ duration: 0.35, ease: EASE }}
+          className="relative w-full max-w-lg rounded-2xl bg-[#0D0F15] border border-[#202534] shadow-[0_20px_60px_rgba(0,0,0,0.85)] p-6 sm:p-8 overflow-hidden"
         >
-          {/* Backdrop */}
-          <motion.div
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          />
-
-          {/* Card */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.92, y: 24 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 12 }}
-            transition={{ duration: 0.45, ease: EASE }}
-            className="relative w-full max-w-lg rounded-3xl p-px bg-gradient-to-br from-purple-500/50 via-white/10 to-cyan-500/40 shadow-[0_0_60px_-12px_rgba(124,58,237,0.6)]"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Welcome to Fretrend"
-          >
-            <div className="relative overflow-hidden rounded-[calc(1.5rem-1px)] bg-[#0c0c10]/95 p-6 backdrop-blur-2xl sm:p-8">
-              {/* Soft moving glow */}
-              <motion.div
-                aria-hidden
-                className="pointer-events-none absolute -top-24 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full blur-[90px]"
-                style={{ background: STEPS[step].glow }}
-                animate={{ opacity: [0.4, 0.7, 0.4] }}
-                transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
-              />
-
-              {/* Header */}
-              <div className="relative mb-6 flex items-center justify-between">
-                <span className="text-xs font-medium tracking-wide text-white/40">
-                  Step {step + 1} of {STEPS.length}
-                </span>
-                <button
-                  onClick={() => void finish()}
-                  disabled={finishing}
-                  className="text-sm text-white/40 transition hover:text-white/80 disabled:opacity-50"
-                >
-                  Skip
-                </button>
-              </div>
-
-              {/* Animated step content */}
-              <div className="relative min-h-[260px]">
-                <AnimatePresence mode="wait" custom={direction}>
-                  <motion.div
-                    key={step}
-                    custom={direction}
-                    variants={cardVariants}
-                    initial="enter"
-                    animate="center"
-                    exit="exit"
-                    transition={{ duration: 0.4, ease: EASE }}
-                    className="flex flex-col items-center text-center"
-                  >
-                    <motion.div
-                      className="mb-5 flex h-20 w-20 items-center justify-center rounded-2xl border border-white/10 bg-gradient-to-br from-purple-600/30 to-cyan-500/20 text-4xl"
-                      animate={{ scale: [1, 1.06, 1] }}
-                      transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-                    >
-                      {STEPS[step].emoji}
-                    </motion.div>
-                    <h2 className="mb-3 bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-2xl font-extrabold text-transparent">
-                      {STEPS[step].title}
-                    </h2>
-                    {renderBody()}
-                  </motion.div>
-                </AnimatePresence>
-              </div>
-
-              {/* Footer: progress dots + navigation */}
-              <div className="relative mt-8 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  {STEPS.map((_, i) => (
-                    <button
-                      key={i}
-                      onClick={() => goTo(i)}
-                      aria-label={`Go to step ${i + 1}`}
-                      className="py-2"
-                    >
-                      <motion.span
-                        className={`block h-2 rounded-full ${
-                          i <= step ? "bg-gradient-to-r from-purple-500 to-cyan-400" : "bg-white/20"
-                        }`}
-                        animate={{ width: i === step ? 26 : 8 }}
-                        transition={{ duration: 0.35, ease: EASE }}
-                      />
-                    </button>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {step > 0 && (
-                    <button
-                      onClick={() => goTo(step - 1)}
-                      disabled={finishing}
-                      className="rounded-xl px-4 py-2.5 text-sm font-medium text-white/60 transition hover:bg-white/5 hover:text-white disabled:opacity-50"
-                    >
-                      Back
-                    </button>
-                  )}
-                  <motion.button
-                    onClick={handlePrimary}
-                    disabled={finishing}
-                    whileHover={{ scale: 1.03, boxShadow: "0 0 24px -8px rgba(124,58,237,0.7)" }}
-                    whileTap={{ scale: 0.97 }}
-                    className="rounded-xl bg-gradient-to-r from-purple-600 to-cyan-500 px-5 py-2.5 text-sm font-semibold text-white transition disabled:opacity-50"
-                  >
-                    {finishing && step === last ? "Loading…" : ctaLabel}
-                  </motion.button>
-                </div>
-              </div>
+          {/* Header & Step progress bar */}
+          <div className="flex items-center justify-between pb-4 mb-6 border-b border-white/[0.08]">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-sky-400" />
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-sky-400">
+                Step {step + 1} of {STEPS.length} — {STEPS[step].tag}
+              </span>
             </div>
-          </motion.div>
+
+            <button
+              onClick={() => void finish()}
+              disabled={finishing}
+              className="text-xs text-white/40 hover:text-white transition font-mono"
+            >
+              Skip Setup
+            </button>
+          </div>
+
+          {/* Animated step content */}
+          <div className="min-h-[280px] flex flex-col items-center justify-center text-center">
+            <div className="w-12 h-12 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-2xl mb-3.5 text-sky-300">
+              {STEPS[step].emoji}
+            </div>
+            <h2 className="text-xl font-bold text-white mb-1.5 font-heading tracking-tight">{STEPS[step].title}</h2>
+            <p className="text-xs text-white/50 mb-4 max-w-sm">{STEPS[step].desc}</p>
+            <div className="w-full">{renderBody()}</div>
+          </div>
+
+          {/* Footer controls & progress dots */}
+          <div className="mt-8 pt-4 border-t border-white/[0.08] flex items-center justify-between gap-4">
+            {/* Dots */}
+            <div className="flex items-center gap-1.5">
+              {STEPS.map((_, i) => (
+                <span
+                  key={i}
+                  className={`h-1.5 rounded-full transition-all duration-300 ${
+                    i === step
+                      ? "w-6 bg-sky-400"
+                      : i < step
+                      ? "w-1.5 bg-sky-400/50"
+                      : "w-1.5 bg-white/20"
+                  }`}
+                />
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2">
+              {step > 0 && (
+                <button
+                  type="button"
+                  onClick={() => goTo(step - 1)}
+                  disabled={finishing}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-white/60 hover:text-white transition"
+                >
+                  Back
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handlePrimary}
+                disabled={finishing}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-white hover:bg-slate-100 text-zinc-950 shadow-[0_0_20px_rgba(255,255,255,0.2)] transition disabled:opacity-50"
+              >
+                {finishing ? "Configuring…" : ctaLabel}
+              </button>
+            </div>
+          </div>
         </motion.div>
-      )}
+      </motion.div>
     </AnimatePresence>
   );
 }

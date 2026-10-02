@@ -1,8 +1,17 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabase";
 import BrandVoiceBadge from "./BrandVoiceBadge";
+import { CONTENT_KIT_COST, calculateContentKitAllowance } from "../config/credits";
+import {
+  EASE_OUT,
+  EASE_SPRING,
+  DURATION_NORMAL,
+  DURATION_FAST,
+  DURATION_MICRO,
+} from "../lib/motion";
 
 export interface ContentKit {
   titles: string[];
@@ -44,13 +53,15 @@ interface PanelProps {
   onGenerate: () => void;
   onReconfigure: () => void;
   loading: boolean;
-  needKey: boolean;
+  needKey?: boolean;
   error: string | null;
   kit: ContentKit | null;
   saving: boolean;
   saved: boolean;
   onSave: () => void;
   onRetry: () => void;
+  creditsRemaining?: number;
+  onCreditsUpdate?: (newBalance: number) => void;
 }
 
 /** Count words in a script for the word-count badge. */
@@ -73,21 +84,21 @@ const SCRIPT_LABELS = ["HOOK:", "INTRO:", "MAIN CONTENT:", "CTA:"];
 function ScriptBody({ script }: { script: string }) {
   const parts = script.split(/(HOOK:|INTRO:|MAIN CONTENT:|CTA:)/g);
   return (
-    <p className="text-sm text-white/85 leading-relaxed whitespace-pre-wrap">
+    <div className="font-sans text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-sky-500/30 selection:text-white">
       {parts.map((part, i) =>
         SCRIPT_LABELS.includes(part) ? (
-          <strong key={i} className="block mt-4 first:mt-0 text-purple-300 font-bold tracking-wide">
+          <span key={i} className="block mt-4 first:mt-0 font-mono text-[11px] font-bold text-sky-400 uppercase tracking-wider">
             {part}
-          </strong>
+          </span>
         ) : (
           <span key={i}>{part}</span>
         ),
       )}
-    </p>
+    </div>
   );
 }
 
-/** Small copy-to-clipboard button used on every item in the kit. */
+/** Precision copy-to-clipboard button used on every item in the kit. */
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -97,19 +108,19 @@ function CopyBtn({ text }: { text: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // clipboard may be blocked (insecure context) — fail quietly
+      // clipboard may be blocked
     }
   }
 
   return (
     <motion.button
       onClick={copy}
-      whileTap={{ scale: 0.9 }}
+      whileTap={{ scale: 0.92 }}
       title="Copy to clipboard"
-      className={`shrink-0 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${
+      className={`shrink-0 px-2.5 py-1 rounded text-[10px] font-mono uppercase tracking-wider font-semibold border transition-all cursor-pointer ${
         copied
-          ? "text-emerald-300 border-emerald-400/30 bg-emerald-400/10"
-          : "text-white/40 border-white/10 bg-white/5 hover:text-white hover:border-purple-500/40"
+          ? "text-sky-300 border-sky-500/50 bg-sky-500/20 shadow-[0_0_12px_rgba(14,165,233,0.3)]"
+          : "text-slate-400 border-[#202534] bg-[#12151E] hover:text-white hover:border-sky-500/40"
       }`}
     >
       {copied ? "✓ Copied" : "Copy"}
@@ -119,17 +130,15 @@ function CopyBtn({ text }: { text: string }) {
 
 function SectionTitle({ icon, children }: { icon: string; children: React.ReactNode }) {
   return (
-    <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-white/40 mb-3">
-      <span className="text-sm">{icon}</span>
-      {children}
+    <h4 className="flex items-center gap-2 text-xs font-mono font-bold uppercase tracking-wider text-slate-400 mb-3">
+      <span>{icon}</span>
+      <span>{children}</span>
     </h4>
   );
 }
 
 /**
- * Coerce a list item to display text. The prompt asks Groq for plain strings,
- * but models occasionally return an object (e.g. { concept, colors, text });
- * flatten those into a readable sentence rather than crashing the render.
+ * Coerce a list item to display text.
  */
 function toText(item: unknown): string {
   if (typeof item === "string") return item;
@@ -149,19 +158,19 @@ function ItemList({ items }: { items: string[] }) {
       {items.map((raw, i) => {
         const item = toText(raw);
         return (
-        <motion.div
-          key={i}
-          initial={{ opacity: 0, x: -8 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: i * 0.05 }}
-          className="group flex items-start gap-3 rounded-xl bg-white/[0.03] border border-white/5 hover:border-purple-500/25 p-3 transition-colors"
-        >
-          <span className="shrink-0 mt-0.5 w-5 h-5 rounded-md bg-purple-500/15 text-purple-300 text-[11px] font-bold flex items-center justify-center">
-            {i + 1}
-          </span>
-          <p className="flex-1 text-sm text-white/85 leading-snug">{item}</p>
-          <CopyBtn text={item} />
-        </motion.div>
+          <motion.div
+            key={i}
+            initial={{ opacity: 0, x: -6 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: i * 0.04 }}
+            className="group flex items-start gap-3 rounded-xl bg-[#12151E] border border-[#202534] hover:border-sky-500/40 p-3 transition-colors"
+          >
+            <span className="shrink-0 mt-0.5 w-5 h-5 rounded-md bg-sky-500/15 text-sky-400 text-[10px] font-mono font-bold flex items-center justify-center border border-sky-500/30">
+              {i + 1}
+            </span>
+            <p className="flex-1 text-xs sm:text-sm text-slate-200 leading-snug font-sans">{item}</p>
+            <CopyBtn text={item} />
+          </motion.div>
         );
       })}
     </div>
@@ -169,44 +178,94 @@ function ItemList({ items }: { items: string[] }) {
 }
 
 const LOADING_STEPS = [
-  "Analysing the trend signal…",
-  "Engineering high-CTR titles…",
-  "Writing scroll-stopping hooks…",
-  "Designing thumbnail concepts…",
-  "Mapping your content angles…",
+  "Analyzing trends...",
+  "Finding content angles...",
+  "Generating hooks...",
+  "Writing script...",
+  "Building your Content Kit...",
 ];
 
 function KitSkeleton() {
+  const [currentStep, setCurrentStep] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentStep((prev) => (prev < LOADING_STEPS.length - 1 ? prev + 1 : prev));
+    }, 1200);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
-    <div className="flex flex-col items-center justify-center py-20 text-center">
-      <motion.div
-        className="relative w-16 h-16 mb-6"
-        animate={{ rotate: 360 }}
-        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-      >
-        <div className="absolute inset-0 rounded-full border-2 border-purple-500/20" />
-        <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-purple-400 border-r-cyan-400" />
-      </motion.div>
-      <motion.p
-        className="text-sm font-medium bg-gradient-to-r from-purple-200 to-cyan-200 bg-clip-text text-transparent"
-        animate={{ opacity: [0.4, 1, 0.4] }}
-        transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
-      >
-        Generating your content kit
-      </motion.p>
-      <div className="mt-6 w-full max-w-xs flex flex-col gap-2">
-        {LOADING_STEPS.map((step, i) => (
-          <motion.div
-            key={step}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 + i * 0.45 }}
-            className="flex items-center gap-2 text-xs text-white/40"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/60" />
-            {step}
-          </motion.div>
-        ))}
+    <div className="flex flex-col items-center justify-center py-16 text-center">
+      {/* Animated gradient ring + pulsing AI indicator */}
+      <div className="relative w-16 h-16 mb-5 flex items-center justify-center">
+        <motion.div
+          className="absolute inset-0 rounded-full border border-sky-500/30"
+          animate={{ scale: [1, 1.1, 1], opacity: [0.4, 0.8, 0.4] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <motion.div
+          className="absolute inset-0 rounded-full border-2 border-transparent border-t-sky-400 border-r-blue-500"
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}
+        />
+        <motion.span
+          className="text-xl"
+          animate={{ scale: [0.95, 1.1, 0.95] }}
+          transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+        >
+          ✨
+        </motion.span>
+      </div>
+
+      <h4 className="text-sm font-semibold text-white font-heading tracking-tight mb-1">
+        Generating your AI Content Kit...
+      </h4>
+      <p className="text-[11px] text-slate-400 font-mono mb-6">
+        Synthesizing high-retention creator blueprint
+      </p>
+
+      {/* Step sequence with subtle fade + slide */}
+      <div className="w-full max-w-xs flex flex-col gap-2">
+        {LOADING_STEPS.map((step, i) => {
+          const isDone = i < currentStep;
+          const isActive = i === currentStep;
+          return (
+            <motion.div
+              key={step}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.08, duration: DURATION_NORMAL, ease: EASE_OUT }}
+              className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-left border transition-all duration-300 ${
+                isActive
+                  ? "bg-sky-500/10 border-sky-500/40 text-white shadow-[0_0_16px_rgba(14,165,233,0.15)]"
+                  : isDone
+                  ? "bg-[#12151E] border-[#202534] text-slate-300"
+                  : "bg-[#0D0F15]/40 border-[#191D28] text-slate-500 opacity-60"
+              }`}
+            >
+              <div className="w-4 h-4 rounded-full flex items-center justify-center shrink-0">
+                {isDone ? (
+                  <span className="text-emerald-400 font-bold text-[10px]">✓</span>
+                ) : isActive ? (
+                  <motion.span
+                    animate={{ scale: [1, 1.35, 1] }}
+                    transition={{ repeat: Infinity, duration: 1.1 }}
+                    className="w-2 h-2 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.9)]"
+                  />
+                ) : (
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-700" />
+                )}
+              </div>
+              <span className="flex-1 font-mono text-[11px]">{step}</span>
+              {isActive && (
+                <span className="text-[10px] font-mono text-sky-400 font-medium">
+                  Processing...
+                </span>
+              )}
+            </motion.div>
+          );
+        })}
       </div>
     </div>
   );
@@ -218,17 +277,17 @@ interface Platform {
   id: string;
   name: string;
   icon: string;
-  accent: string; // gradient for the active-tab pill
-  ring: string; // active-tab border
-  dot: string; // section-bullet color
+  accent: string;
+  ring: string;
+  dot: string;
 }
 
 const PLATFORMS: Platform[] = [
-  { id: "youtube", name: "YouTube", icon: "▶️", accent: "from-red-500/25 to-rose-500/10", ring: "border-rose-500/40", dot: "bg-rose-400" },
-  { id: "tiktok", name: "TikTok", icon: "🎵", accent: "from-cyan-500/25 to-teal-500/10", ring: "border-cyan-500/40", dot: "bg-cyan-400" },
-  { id: "reels", name: "Reels", icon: "📸", accent: "from-pink-500/25 to-fuchsia-500/10", ring: "border-pink-500/40", dot: "bg-pink-400" },
-  { id: "twitter", name: "X", icon: "𝕏", accent: "from-sky-500/25 to-blue-500/10", ring: "border-sky-500/40", dot: "bg-sky-400" },
-  { id: "linkedin", name: "LinkedIn", icon: "💼", accent: "from-blue-500/25 to-indigo-500/10", ring: "border-blue-500/40", dot: "bg-blue-400" },
+  { id: "youtube", name: "YouTube", icon: "▶️", accent: "from-red-500/20 to-rose-500/10", ring: "border-rose-500/40", dot: "bg-rose-400" },
+  { id: "tiktok", name: "TikTok", icon: "🎵", accent: "from-cyan-500/20 to-teal-500/10", ring: "border-cyan-500/40", dot: "bg-cyan-400" },
+  { id: "reels", name: "Reels", icon: "📸", accent: "from-pink-500/20 to-fuchsia-500/10", ring: "border-pink-500/40", dot: "bg-pink-400" },
+  { id: "twitter", name: "X", icon: "𝕏", accent: "from-sky-500/20 to-blue-500/10", ring: "border-sky-500/40", dot: "bg-sky-400" },
+  { id: "linkedin", name: "LinkedIn", icon: "💼", accent: "from-blue-500/20 to-indigo-500/10", ring: "border-blue-500/40", dot: "bg-blue-400" },
 ];
 
 interface PlatformSection {
@@ -237,15 +296,12 @@ interface PlatformSection {
   value: string | string[];
 }
 
-/** Renders one platform's generated sections with copy buttons. */
 function PlatformSections({ sections, dot }: { sections: PlatformSection[]; dot: string }) {
   return (
     <div className="flex flex-col gap-3">
       {sections.map((s, i) => {
         const isList = Array.isArray(s.value);
         const list = isList ? (s.value as string[]) : [];
-        // Short list items (hashtags, tags, sounds) read best as chips; long
-        // ones (thread tweets) as individually-copyable stacked lines.
         const asChips = isList && list.every((v) => v.length <= 30);
         const copyAll = isList ? list.join(asChips ? " " : "\n") : (s.value as string);
         return (
@@ -254,10 +310,10 @@ function PlatformSections({ sections, dot }: { sections: PlatformSection[]; dot:
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="rounded-xl bg-white/[0.03] border border-white/5 p-3"
+            className="rounded-xl bg-[#12151E] border border-[#202534] p-3.5"
           >
             <div className="flex items-center justify-between gap-2 mb-2">
-              <h5 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-white/40">
+              <h5 className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-300">
                 <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
                 {s.label}
               </h5>
@@ -268,27 +324,30 @@ function PlatformSections({ sections, dot }: { sections: PlatformSection[]; dot:
               <ScriptBody script={s.value as string} />
             ) : asChips ? (
               <div className="flex flex-wrap gap-1.5">
-                {list.map((chip, j) => (
+                {list.map((chip, ci) => (
                   <span
-                    key={j}
-                    className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/70"
+                    key={ci}
+                    className="px-2 py-0.5 rounded-md bg-[#0D0F15] border border-[#202534] text-xs font-mono text-slate-300"
                   >
                     {chip}
                   </span>
                 ))}
               </div>
             ) : (
-              <div className="flex flex-col gap-2">
-                {list.map((line, j) => (
-                  <div
-                    key={j}
-                    className="group flex items-start gap-2 rounded-lg bg-white/[0.03] border border-white/5 p-2.5"
+              <ol className="flex flex-col gap-2">
+                {list.map((item, li) => (
+                  <li
+                    key={li}
+                    className="flex items-start gap-2.5 p-2 rounded-lg bg-[#0D0F15] border border-[#202534] text-xs sm:text-sm text-slate-200"
                   >
-                    <p className="flex-1 text-sm text-white/85 whitespace-pre-wrap leading-snug">{line}</p>
-                    <CopyBtn text={line} />
-                  </div>
+                    <span className="shrink-0 mt-0.5 w-4 h-4 rounded bg-sky-500/20 text-sky-300 text-[10px] font-mono font-bold flex items-center justify-center">
+                      {li + 1}
+                    </span>
+                    <span className="flex-1 font-sans">{item}</span>
+                    <CopyBtn text={item} />
+                  </li>
                 ))}
-              </div>
+              </ol>
             )}
           </motion.div>
         );
@@ -297,12 +356,6 @@ function PlatformSections({ sections, dot }: { sections: PlatformSection[]; dot:
   );
 }
 
-/**
- * Self-contained multi-platform repurposer. Lives inside the kit so both the
- * trends and alerts pages get it for free. It resolves the user's session
- * itself and calls /api/platform-kit on demand, caching each platform's result
- * so switching tabs is instant. Remount (keyed by topic) resets the cache.
- */
 function MultiPlatformSection({ topic, niche, score }: { topic: string; niche?: string; score: number }) {
   const [active, setActive] = useState<string | null>(null);
   const [cache, setCache] = useState<Record<string, PlatformSection[]>>({});
@@ -325,13 +378,13 @@ function MultiPlatformSection({ topic, niche, score }: { topic: string; niche?: 
     });
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        setNeedKey(true);
-        return;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
       }
       const res = await fetch("/api/platform-kit", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        headers,
         body: JSON.stringify({ topic, niche: niche || "general", score, platform }),
       });
       const data = await res.json();
@@ -340,10 +393,7 @@ function MultiPlatformSection({ topic, niche, score }: { topic: string; niche?: 
           setNeedKey(true);
           return;
         }
-        const msg =
-          data.error === "invalid_key"
-            ? "Your Groq API key was rejected. Update it in Settings."
-            : data.error ?? "Failed to generate platform content.";
+        const msg = data.error ?? "Failed to generate platform content.";
         setErrors((prev) => ({ ...prev, [platform]: msg }));
         return;
       }
@@ -361,7 +411,6 @@ function MultiPlatformSection({ topic, niche, score }: { topic: string; niche?: 
     if (!cache[platform] && loadingId !== platform) void generate(platform);
   }
 
-  // Which view to show — drives the AnimatePresence key for smooth swaps.
   let viewKey = "empty";
   if (active) {
     if (needKey) viewKey = "needkey";
@@ -382,72 +431,87 @@ function MultiPlatformSection({ topic, niche, score }: { topic: string; niche?: 
               key={p.id}
               onClick={() => selectPlatform(p.id)}
               whileTap={{ scale: 0.95 }}
-              className={`relative shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                isActive ? "text-white" : "text-white/50 hover:text-white"
+              className={`relative shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                isActive ? "text-white" : "text-slate-400 hover:text-white"
               }`}
             >
               {isActive && (
-                <motion.span
-                  layoutId="platform-pill"
-                  className={`absolute inset-0 rounded-lg bg-gradient-to-r ${p.accent} border ${p.ring}`}
-                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                <motion.div
+                  layoutId="active-platform-pill"
+                  className="absolute inset-0 rounded-lg bg-[#12151E] border border-sky-500/40"
+                  transition={{ type: "spring", stiffness: 450, damping: 35 }}
                 />
               )}
-              <span className="relative z-10 text-sm">{p.icon}</span>
-              <span className="relative z-10">{p.name}</span>
+              <span className="relative z-10 text-sm leading-none">{p.icon}</span>
+              <span className="relative z-10 font-sans">{p.name}</span>
+              {cache[p.id] && (
+                <span className="relative z-10 w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              )}
             </motion.button>
           );
         })}
       </div>
 
-      {/* Active platform content */}
-      <div className="mt-3 min-h-[72px]">
+      {/* Platform content body */}
+      <div className="mt-3">
         <AnimatePresence mode="wait">
-          <motion.div
-            key={viewKey}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.22 }}
-          >
-            {!active ? (
-              <p className="text-center text-sm text-white/40 py-6">
-                Pick a platform to generate content tailored to it.
+          {viewKey === "empty" && (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="p-6 rounded-2xl border border-dashed border-[#202534] bg-[#0D0F15] text-center"
+            >
+              <p className="text-xs text-slate-400 font-sans">
+                Choose a platform tab above to generate platform-native hooks, descriptions, and hashtags.
               </p>
-            ) : needKey ? (
-              <div className="text-center py-6">
-                <div className="text-3xl mb-2">🔑</div>
-                <p className="text-sm text-white/60 mb-3">Add your Groq key to generate platform content.</p>
-                <a
-                  href="/settings"
-                  className="inline-block px-4 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-purple-600 to-cyan-500"
-                >
-                  ⚙️ Open Settings
-                </a>
-              </div>
-            ) : isLoading ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <motion.div
-                  className="w-8 h-8 mb-3 rounded-full border-2 border-purple-500/20 border-t-purple-400"
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 0.9, repeat: Infinity, ease: "linear" }}
-                />
-                <p className="text-xs text-white/50">Optimizing for {activeMeta?.name}…</p>
-              </div>
-            ) : activeError ? (
-              <div className="text-center py-6">
-                <p className="text-sm text-red-400/80 mb-3">{activeError}</p>
-                <button
-                  onClick={() => void generate(active)}
-                  className="px-4 py-2 rounded-lg text-xs font-semibold bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
-                >
-                  ↻ Try again
-                </button>
-              </div>
-            ) : activeSections ? (
-              <PlatformSections sections={activeSections} dot={activeMeta?.dot ?? "bg-purple-400"} />
-            ) : null}
-          </motion.div>
+            </motion.div>
+          )}
+
+          {viewKey.startsWith("loading-") && (
+            <motion.div
+              key={viewKey}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="p-8 rounded-2xl border border-[#202534] bg-[#12151E] flex flex-col items-center justify-center text-center gap-3"
+            >
+              <div className="w-8 h-8 rounded-full border-2 border-sky-500/20 border-t-sky-400 animate-spin" />
+              <p className="text-xs font-mono text-slate-300">
+                Optimizing for {activeMeta?.name}…
+              </p>
+            </motion.div>
+          )}
+
+          {viewKey.startsWith("error-") && (
+            <motion.div
+              key={viewKey}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 flex items-center justify-between gap-3 text-xs"
+            >
+              <span className="text-rose-300 font-sans">{activeError}</span>
+              <button
+                onClick={() => active && generate(active)}
+                className="shrink-0 px-3 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-mono uppercase text-[10px] font-bold transition"
+              >
+                Retry
+              </button>
+            </motion.div>
+          )}
+
+          {viewKey.startsWith("content-") && activeSections && (
+            <motion.div
+              key={viewKey}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+            >
+              <PlatformSections sections={activeSections} dot={activeMeta?.dot ?? "bg-sky-400"} />
+            </motion.div>
+          )}
         </AnimatePresence>
       </div>
     </div>
@@ -473,8 +537,44 @@ export default function ContentKitPanel({
   saved,
   onSave,
   onRetry,
+  creditsRemaining,
+  onCreditsUpdate,
 }: PanelProps) {
   const selected = DURATIONS.find((d) => d.seconds === duration) ?? DURATIONS[1];
+  const [localCredits, setLocalCredits] = useState<number | null>(creditsRemaining ?? null);
+
+  useEffect(() => {
+    if (typeof creditsRemaining === "number") {
+      setLocalCredits(creditsRemaining);
+    }
+  }, [creditsRemaining]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) return;
+        const res = await fetch("/api/credits", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled && typeof data.credits === "number") {
+            setLocalCredits(data.credits);
+            onCreditsUpdate?.(data.credits);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, onCreditsUpdate]);
   return (
     <AnimatePresence>
       {open && (
@@ -484,43 +584,49 @@ export default function ContentKitPanel({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: DURATION_FAST, ease: EASE_OUT }}
             onClick={onClose}
-            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm"
           />
 
           {/* Slide-out panel */}
           <motion.aside
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", stiffness: 320, damping: 34 }}
-            className="fixed top-0 right-0 z-50 h-full w-full sm:w-[480px] flex flex-col bg-[#0c0c10]/95 backdrop-blur-2xl border-l border-white/10 shadow-2xl"
+            initial={{ x: "100%", opacity: 0.8 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: "100%", opacity: 0.8 }}
+            transition={{ duration: DURATION_NORMAL, ease: EASE_OUT }}
+            className="fixed top-0 right-0 z-50 h-full w-full sm:w-[560px] flex flex-col bg-[#0D0F15] border-l border-[#202534] shadow-[0_20px_60px_rgba(0,0,0,0.85)]"
           >
             {/* Header */}
-            <div className="shrink-0 px-6 py-5 border-b border-white/10 bg-gradient-to-r from-purple-600/10 to-cyan-500/10">
+            <div className="shrink-0 px-5 sm:px-6 py-4 border-b border-[#202534] bg-[#08090C]">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-lg">✨</span>
-                    <h3 className="text-base font-bold bg-gradient-to-r from-purple-200 to-cyan-200 bg-clip-text text-transparent">
-                      AI Content Kit
-                    </h3>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-sky-400 font-semibold">
+                      PIPELINE STAGE 04 • AI CREATIVE STUDIO
+                    </span>
                     {score > 0 && (
-                      <span className="text-[10px] font-bold text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-full px-2 py-0.5">
-                        {score}/100
+                      <span className="text-[10px] font-mono font-bold text-sky-300 bg-sky-500/20 border border-sky-500/30 rounded px-2 py-0.5 tabular-nums">
+                        {score}/100 Score
+                      </span>
+                    )}
+                    {typeof localCredits === "number" && (
+                      <span className="text-[10px] font-mono font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 rounded px-2 py-0.5 tabular-nums">
+                        ⚡ {localCredits} Credits
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-white/60 truncate" title={topic}>
+                  <h3 className="font-heading text-base sm:text-lg font-bold text-white tracking-tight leading-snug truncate" title={topic}>
                     {topic}
-                  </p>
-                  <div className="mt-2">
+                  </h3>
+                  <div className="mt-2 flex items-center gap-2">
                     <BrandVoiceBadge />
                   </div>
                 </div>
                 <button
                   onClick={onClose}
-                  className="shrink-0 w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-white/50 hover:text-white transition-colors flex items-center justify-center"
+                  className="shrink-0 w-8 h-8 rounded-lg bg-[#12151E] hover:bg-[#1B2030] border border-[#202534] text-slate-400 hover:text-white transition-colors flex items-center justify-center font-mono text-xs cursor-pointer"
                   aria-label="Close"
                 >
                   ✕
@@ -529,15 +635,15 @@ export default function ContentKitPanel({
             </div>
 
             {/* Body */}
-            <div className="flex-1 overflow-y-auto px-6 py-5">
+            <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-5 space-y-6">
               {/* Setup — pick script length before generating */}
               {!started && (
-                <div className="flex flex-col py-4">
-                  <SectionTitle icon="⏱️">Video Duration</SectionTitle>
-                  <p className="text-white/50 text-sm mb-4">
-                    Pick a length — the script will be written to match it.
+                <div className="flex flex-col py-2">
+                  <SectionTitle icon="⏱️">Target Duration &amp; Pacing</SectionTitle>
+                  <p className="text-slate-400 text-xs mb-4">
+                    The AI paces the narrative beats, word counts, and call-to-action specifically for your selected format.
                   </p>
-                  <div className="flex flex-col gap-2 mb-7">
+                  <div className="flex flex-col gap-2 mb-6">
                     {DURATIONS.map((d) => {
                       const active = d.seconds === duration;
                       return (
@@ -545,29 +651,29 @@ export default function ContentKitPanel({
                           key={d.seconds}
                           onClick={() => onDurationChange(d.seconds)}
                           whileTap={{ scale: 0.99 }}
-                          className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors ${
+                          className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left transition-all cursor-pointer ${
                             active
-                              ? "border-purple-500/50 bg-gradient-to-r from-purple-600/20 to-cyan-500/15"
-                              : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"
+                              ? "border-sky-500/60 bg-sky-500/15 shadow-[0_0_20px_-6px_rgba(14,165,233,0.25)]"
+                              : "border-[#202534] bg-[#12151E] hover:bg-[#161A26]"
                           }`}
                         >
                           <span className="flex items-center gap-3">
                             <span
-                              className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                                active ? "border-purple-400" : "border-white/20"
+                              className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                                active ? "border-sky-400 bg-sky-500/30" : "border-slate-600"
                               }`}
                             >
-                              {active && <span className="w-2 h-2 rounded-full bg-purple-400" />}
+                              {active && <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />}
                             </span>
-                            <span className="text-sm font-medium text-white/90">{d.label}</span>
+                            <span className="text-xs sm:text-sm font-semibold text-white font-sans">{d.label}</span>
                           </span>
-                          <span className="flex items-center gap-2 text-[11px]">
-                            <span className="text-white/40">~{d.words} words</span>
+                          <span className="flex items-center gap-2 text-[11px] font-mono">
+                            <span className="text-slate-400">~{d.words} words</span>
                             <span
-                              className={`px-2 py-0.5 rounded-full border ${
+                              className={`px-2 py-0.5 rounded border text-[10px] uppercase font-semibold ${
                                 d.format === "short-form"
-                                  ? "text-rose-300 border-rose-400/20 bg-rose-400/10"
-                                  : "text-cyan-300 border-cyan-400/20 bg-cyan-400/10"
+                                    ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+                                    : "text-blue-400 border-blue-500/30 bg-blue-500/10"
                               }`}
                             >
                               {d.format}
@@ -577,173 +683,352 @@ export default function ContentKitPanel({
                       );
                     })}
                   </div>
-                  <motion.button
-                    onClick={onGenerate}
-                    whileHover={{ scale: 1.01, boxShadow: "0 0 26px -8px rgba(124,58,237,0.7)" }}
-                    whileTap={{ scale: 0.99 }}
-                    className="w-full py-3 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500"
-                  >
-                    ✨ Generate Content Kit
-                  </motion.button>
+
+                  {/* Credit Status Card */}
+                  <div className="mb-4 rounded-xl border border-[#202534] bg-[#12151E] p-3.5 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-base">
+                        ⚡
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-semibold text-white">
+                            Available Balance:
+                          </span>
+                          <span className="text-xs font-mono font-bold text-sky-400">
+                            {typeof localCredits === "number" ? `${localCredits} Credits` : "Loading..."}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">
+                          Cost: <span className="font-semibold text-slate-200">{CONTENT_KIT_COST} credits</span> per kit
+                          {typeof localCredits === "number" && (
+                            <span className="text-slate-500"> • {calculateContentKitAllowance(localCredits)} kits available</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                    {typeof localCredits === "number" && localCredits < CONTENT_KIT_COST && (
+                      <Link
+                        href="/pricing"
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 transition-colors"
+                      >
+                        Upgrade →
+                      </Link>
+                    )}
+                  </div>
+
+                  {typeof localCredits === "number" && localCredits < CONTENT_KIT_COST ? (
+                    <div className="space-y-2.5">
+                      <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex items-start gap-2">
+                        <span className="text-amber-400">⚠️</span>
+                        <div>
+                          <p className="font-semibold">You need {CONTENT_KIT_COST} credits to generate a Content Kit.</p>
+                          <p className="text-[11px] text-amber-300/80 mt-0.5">
+                            You currently have {localCredits} credits remaining. Upgrade your plan or top up to generate kits.
+                          </p>
+                        </div>
+                      </div>
+                      <Link
+                        href="/pricing"
+                        className="w-full py-3 px-4 rounded-xl font-medium text-xs sm:text-sm bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                      >
+                        <span>Upgrade Plan to Generate</span>
+                        <span>⚡</span>
+                      </Link>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={onGenerate}
+                      className="w-full py-3 px-4 rounded-xl font-medium text-xs sm:text-sm bg-sky-500 hover:bg-sky-400 text-white shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                    >
+                      <span>Generate Content Kit · {CONTENT_KIT_COST} credits</span>
+                      <span>✨</span>
+                    </button>
+                  )}
                 </div>
               )}
 
               {started && loading && <KitSkeleton />}
 
               {started && !loading && needKey && (
-                <div className="flex flex-col items-center justify-center py-20 text-center">
-                  <div className="text-5xl mb-4">🔑</div>
-                  <h4 className="text-base font-semibold mb-2">Groq key required</h4>
-                  <p className="text-white/50 text-sm max-w-xs mb-6">
-                    Add your free Groq API key in Settings to unlock AI Content Kits
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <div className="text-4xl mb-3">✨</div>
+                  <h4 className="font-heading text-base font-bold text-white mb-2">Generation Unavailable</h4>
+                  <p className="text-slate-400 text-xs max-w-xs mb-6">
+                    AI Content Kit generation is temporarily unavailable. Please retry in a moment.
                   </p>
-                  <a
-                    href="/settings"
-                    className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-purple-600 to-cyan-500"
-                  >
-                    ⚙️ Open Settings
-                  </a>
-                </div>
-              )}
-
-              {started && !loading && !needKey && error && (
-                <div className="flex flex-col items-center justify-center py-20 text-center">
-                  <div className="text-5xl mb-4">⚠️</div>
-                  <h4 className="text-base font-semibold mb-2">Generation failed</h4>
-                  <p className="text-red-400/80 text-sm max-w-xs mb-6">{error}</p>
                   <button
                     onClick={onRetry}
-                    className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
+                    className="px-5 py-2.5 rounded-full text-xs font-mono font-bold uppercase tracking-wider bg-sky-500 text-white hover:bg-sky-400 transition-colors shadow-sm shadow-sky-500/25 cursor-pointer"
                   >
-                    ↻ Try again
+                    ↻ Retry
                   </button>
                 </div>
               )}
 
+              {started && !loading && !needKey && error && (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <div className="text-4xl mb-3">
+                    {error.toLowerCase().includes("credit") ? "⚡" : "⚠️"}
+                  </div>
+                  <h4 className="font-heading text-base font-semibold text-white mb-2">
+                    {error.toLowerCase().includes("credit") ? "Insufficient Credits" : "Generation Failed"}
+                  </h4>
+                  <p className="text-rose-400 text-xs max-w-xs mb-6 font-sans">{error}</p>
+                  {error.toLowerCase().includes("credit") ? (
+                    <div className="flex items-center gap-3">
+                      <Link
+                        href="/pricing"
+                        className="px-5 py-2.5 rounded-full text-xs font-mono font-bold uppercase tracking-wider bg-sky-500 text-white hover:bg-sky-400 transition-colors shadow-sm shadow-sky-500/25 cursor-pointer"
+                      >
+                        Upgrade Plan →
+                      </Link>
+                      <button
+                        onClick={onReconfigure}
+                        className="px-5 py-2.5 rounded-full text-xs font-mono font-semibold bg-[#12151E] border border-[#202534] hover:bg-[#1B2030] text-slate-300 transition-colors cursor-pointer"
+                      >
+                        Back
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={onRetry}
+                      className="px-5 py-2 rounded-full text-xs font-mono font-semibold bg-[#12151E] border border-[#202534] hover:bg-[#1B2030] text-white transition-colors cursor-pointer"
+                    >
+                      ↻ Try again
+                    </button>
+                  )}
+                </div>
+              )}
+
               {started && !loading && !needKey && !error && kit && (
-                <div className="flex flex-col gap-7">
-                  {/* Full video script */}
+                <div className="flex flex-col gap-6">
+                  {/* Credit deduction banner */}
+                  {typeof localCredits === "number" && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: DURATION_NORMAL, ease: EASE_OUT }}
+                      className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-between text-xs"
+                    >
+                      <div className="flex items-center gap-2 text-slate-200">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                        <span>Content Kit Generated (<strong>{CONTENT_KIT_COST} credits</strong> deducted)</span>
+                      </div>
+                      <span className="font-mono text-sky-400 font-bold">
+                        {localCredits} credits remaining
+                      </span>
+                    </motion.div>
+                  )}
+
+                  {/* 1. Trend Insight & Virality Score */}
+                  <motion.section
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: 0.04 }}
+                    className="space-y-4"
+                  >
+                    {/* Virality / Opportunity Score Meter */}
+                    <div className="p-4 rounded-xl bg-[#10141F] border border-sky-500/25 flex items-center justify-between shadow-sm">
+                      <div>
+                        <span className="text-[10px] font-mono uppercase font-semibold tracking-wider text-sky-400 block mb-0.5">
+                          Virality &amp; Opportunity Score
+                        </span>
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="font-mono font-bold text-2xl sm:text-3xl text-white tracking-tight tabular-nums">{score || 90}</span>
+                          <span className="text-xs text-slate-500 font-mono">/ 100</span>
+                        </div>
+                        <span className="text-xs text-slate-400 block mt-0.5">
+                          {score >= 80 ? "🔥 High Viral Potential" : score >= 60 ? "📈 Strong Trend Momentum" : "🌱 Emerging Opportunity"}
+                        </span>
+                      </div>
+                      <div className="w-12 h-12 rounded-xl bg-[#08090C] border border-sky-500/30 flex items-center justify-center font-mono font-bold text-base text-sky-400">
+                        {score || 90}%
+                      </div>
+                    </div>
+
+                    {/* Why trending */}
+                    <div>
+                      <SectionTitle icon="📈">Why It&apos;s Trending</SectionTitle>
+                      <div className="group relative rounded-xl bg-[#12151E] border border-[#202534] p-4">
+                        <p className="text-xs sm:text-sm text-slate-300 leading-relaxed pr-2 font-sans">{kit.why_trending}</p>
+                        <div className="mt-3 flex justify-end">
+                          <CopyBtn text={kit.why_trending} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick facts */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="rounded-xl bg-[#12151E] border border-sky-500/20 p-4">
+                        <SectionTitle icon="🎬">Best Format</SectionTitle>
+                        <div className="flex items-start gap-3">
+                          <p className="flex-1 text-xs sm:text-sm text-slate-200 leading-snug font-sans">{kit.best_format}</p>
+                          <CopyBtn text={kit.best_format} />
+                        </div>
+                      </div>
+                      <div className="rounded-xl bg-[#12151E] border border-cyan-500/20 p-4">
+                        <SectionTitle icon="⏳">Catch Window</SectionTitle>
+                        <div className="flex items-start gap-3">
+                          <p className="flex-1 text-xs sm:text-sm text-slate-200 leading-snug font-sans">{kit.catch_window}</p>
+                          <CopyBtn text={kit.catch_window} />
+                        </div>
+                      </div>
+                    </div>
+                  </motion.section>
+
+                  {/* 2. Scroll-Stopping Hooks */}
+                  <motion.section
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: 0.12 }}
+                  >
+                    <SectionTitle icon="🪝">Scroll-Stopping Hooks</SectionTitle>
+                    <ItemList items={kit.hooks} />
+                  </motion.section>
+
+                  {/* 3. Viral High-CTR Titles */}
+                  <motion.section
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: 0.18 }}
+                  >
+                    <SectionTitle icon="🏆">Viral High-CTR Titles</SectionTitle>
+                    <ItemList items={kit.titles} />
+                  </motion.section>
+
+                  {/* 4. Thumbnail Concepts */}
+                  <motion.section
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: 0.24 }}
+                  >
+                    <SectionTitle icon="🖼️">Thumbnail Concepts</SectionTitle>
+                    <ItemList items={kit.thumbnail_ideas} />
+                  </motion.section>
+
+                  {/* 5. Creative Script Workspace */}
                   {kit.script && (() => {
                     const words = countWords(kit.script);
                     return (
-                      <section>
+                      <motion.section
+                        initial={{ opacity: 0, y: 14 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: 0.3 }}
+                      >
                         <div className="flex items-center justify-between mb-3">
-                          <SectionTitle icon="🎥">Full Video Script</SectionTitle>
-                          <CopyBtn text={kit.script} />
-                        </div>
-                        <div className="rounded-xl p-px bg-gradient-to-br from-purple-500/40 via-white/5 to-cyan-500/30">
-                          <div className="rounded-xl bg-[#0c0c10]/80 p-4">
-                            <div className="flex flex-wrap items-center gap-2 mb-3">
-                              <span className="text-[11px] px-2 py-0.5 rounded-full border border-purple-400/20 bg-purple-400/10 text-purple-300">
-                                {selected.label}
-                              </span>
-                              <span className="text-[11px] px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/60">
-                                {words} words
-                                <span className="text-white/30"> / ~{selected.words} target</span>
-                              </span>
-                            </div>
-                            <ScriptBody script={kit.script} />
-                            <div className="mt-3 pt-3 border-t border-white/5 flex items-center gap-1.5 text-[11px] text-white/40">
-                              <span>⏱️</span>
-                              <span>Est. read time {readTime(words)}</span>
-                            </div>
+                          <SectionTitle icon="🎥">Creative Script Workspace</SectionTitle>
+                          <div className="flex items-center gap-2">
+                            <Link
+                              href={`/create?topic=${encodeURIComponent(topic)}&script=${encodeURIComponent(kit.script)}`}
+                              className="px-2.5 py-1 rounded text-[10px] font-mono uppercase tracking-wider font-bold bg-sky-500/15 border border-sky-500/40 text-sky-300 hover:bg-sky-500/25 transition-all flex items-center gap-1 cursor-pointer"
+                              title="Advance to Voiceover stage"
+                            >
+                              <span>🎙️ Create Voiceover</span>
+                              <span>→</span>
+                            </Link>
+                            <CopyBtn text={kit.script} />
                           </div>
                         </div>
-                      </section>
+                        <div className="rounded-2xl border border-[#202534] bg-[#08090C] p-4 font-mono">
+                          <div className="flex flex-wrap items-center gap-2 mb-3">
+                            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/15 text-sky-300 font-semibold">
+                              {selected.label}
+                            </span>
+                            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full border border-[#202534] bg-[#12151E] text-slate-400">
+                              {words} words
+                              <span className="text-slate-500"> / ~{selected.words} target</span>
+                            </span>
+                          </div>
+                          <ScriptBody script={kit.script} />
+                          <div className="mt-3 pt-3 border-t border-[#202534] flex items-center justify-between text-[10px] font-mono text-slate-500">
+                            <div className="flex items-center gap-1.5">
+                              <span>⏱️</span>
+                              <span>Est. read / record time {readTime(words)}</span>
+                            </div>
+                            <Link
+                              href={`/create?topic=${encodeURIComponent(topic)}&script=${encodeURIComponent(kit.script)}`}
+                              className="text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1"
+                            >
+                              <span>Send to AI Studio</span>
+                              <span>→</span>
+                            </Link>
+                          </div>
+                        </div>
+                      </motion.section>
                     );
                   })()}
 
-                  {/* Why trending */}
-                  <section>
-                    <SectionTitle icon="📈">Why It&apos;s Trending</SectionTitle>
-                    <div className="group relative rounded-xl bg-white/[0.03] border border-white/5 p-4">
-                      <p className="text-sm text-white/80 leading-relaxed pr-2">{kit.why_trending}</p>
-                      <div className="mt-3 flex justify-end">
-                        <CopyBtn text={kit.why_trending} />
-                      </div>
+                  {/* 6. Content Angles & Virality Tips */}
+                  <motion.section
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: 0.36 }}
+                    className="space-y-6"
+                  >
+                    <div>
+                      <SectionTitle icon="🎯">Content Angles</SectionTitle>
+                      <ItemList items={kit.content_angles} />
                     </div>
-                  </section>
-
-                  {/* Quick facts */}
-                  <section className="grid grid-cols-1 gap-3">
-                    <div className="rounded-xl bg-gradient-to-br from-purple-500/10 to-transparent border border-purple-500/15 p-4">
-                      <SectionTitle icon="🎬">Best Format</SectionTitle>
-                      <div className="flex items-start gap-3">
-                        <p className="flex-1 text-sm text-white/85 leading-snug">{kit.best_format}</p>
-                        <CopyBtn text={kit.best_format} />
-                      </div>
+                    <div>
+                      <SectionTitle icon="🚀">Virality Tips</SectionTitle>
+                      <ItemList items={kit.virality_tips} />
                     </div>
-                    <div className="rounded-xl bg-gradient-to-br from-cyan-500/10 to-transparent border border-cyan-500/15 p-4">
-                      <SectionTitle icon="⏳">Catch Window</SectionTitle>
-                      <div className="flex items-start gap-3">
-                        <p className="flex-1 text-sm text-white/85 leading-snug">{kit.catch_window}</p>
-                        <CopyBtn text={kit.catch_window} />
-                      </div>
-                    </div>
-                  </section>
+                  </motion.section>
 
-                  {/* Titles */}
-                  <section>
-                    <SectionTitle icon="🏆">Viral Titles</SectionTitle>
-                    <ItemList items={kit.titles} />
-                  </section>
-
-                  {/* Hooks */}
-                  <section>
-                    <SectionTitle icon="🪝">Opening Hooks</SectionTitle>
-                    <ItemList items={kit.hooks} />
-                  </section>
-
-                  {/* Thumbnail ideas */}
-                  <section>
-                    <SectionTitle icon="🖼️">Thumbnail Ideas</SectionTitle>
-                    <ItemList items={kit.thumbnail_ideas} />
-                  </section>
-
-                  {/* Content angles */}
-                  <section>
-                    <SectionTitle icon="🎯">Content Angles</SectionTitle>
-                    <ItemList items={kit.content_angles} />
-                  </section>
-
-                  {/* Virality tips */}
-                  <section>
-                    <SectionTitle icon="🚀">Virality Tips</SectionTitle>
-                    <ItemList items={kit.virality_tips} />
-                  </section>
-
-                  {/* Multi-platform repurposing */}
-                  <section>
-                    <SectionTitle icon="🌐">Multi-Platform Kit</SectionTitle>
-                    <p className="text-xs text-white/40 -mt-1 mb-3">
-                      Repurpose this trend with content tailored to each platform.
+                  {/* 7. Multi-platform repurposing */}
+                  <motion.section
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: 0.42 }}
+                  >
+                    <SectionTitle icon="🌐">Multi-Platform Studio</SectionTitle>
+                    <p className="text-xs text-slate-400 -mt-1 mb-3 font-sans">
+                      Instantly repurpose this trend with content optimized for each algorithm.
                     </p>
                     <MultiPlatformSection key={topic} topic={topic} niche={niche} score={score} />
-                  </section>
+                  </motion.section>
                 </div>
               )}
             </div>
 
             {/* Footer — Save Report */}
             {started && !loading && !needKey && !error && kit && (
-              <div className="shrink-0 px-6 py-4 border-t border-white/10 bg-[#0c0c10]/80 flex gap-3">
+              <div className="shrink-0 px-5 sm:px-6 py-4 border-t border-[#202534] bg-[#08090C] flex gap-3">
                 <motion.button
                   onClick={onReconfigure}
                   whileTap={{ scale: 0.98 }}
                   title="Pick a different length and regenerate"
-                  className="shrink-0 px-4 py-3 rounded-xl font-medium bg-white/5 border border-white/10 hover:bg-white/10 text-white/70 hover:text-white transition"
+                  className="shrink-0 px-4 py-2 rounded-xl text-xs font-mono font-medium bg-[#12151E] border border-[#202534] hover:bg-[#1B2030] text-slate-300 transition cursor-pointer"
                 >
                   ⏱️ Length
                 </motion.button>
-                <motion.button
+                <button
+                  type="button"
                   onClick={onSave}
                   disabled={saving || saved}
-                  whileHover={{ scale: saving || saved ? 1 : 1.01 }}
-                  whileTap={{ scale: saving || saved ? 1 : 0.99 }}
-                  className="flex-1 py-3 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 disabled:opacity-60 transition"
+                  className="flex-1 py-2 px-3 rounded-lg text-xs font-medium bg-sky-500 hover:bg-sky-400 text-white shadow-sm disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
                 >
-                  {saving ? "Saving…" : saved ? "✅ Report Saved" : "💾 Save Report"}
-                </motion.button>
+                  {saving ? "Saving to Projects…" : saved ? "✅ Saved to Projects" : "💾 Save to Projects"}
+                </button>
+                <Link
+                  href={`/create?topic=${encodeURIComponent(topic)}&script=${encodeURIComponent(kit.script)}`}
+                  className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium bg-[#11141E] hover:bg-[#161B28] border border-[#202738] text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Open in AI Studio to create voiceover & captions"
+                >
+                  <span>🎙️ Studio</span>
+                  <span>→</span>
+                </Link>
+                {saved && (
+                  <Link
+                    href="/projects"
+                    className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium bg-[#11141E] border border-[#202534] hover:bg-[#161B28] text-slate-300 hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Projects</span>
+                    <span>→</span>
+                  </Link>
+                )}
               </div>
             )}
           </motion.aside>

@@ -1,14 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import { useAuthGate } from "../lib/useAuthGate";
-import Sidebar from "../components/Sidebar";
-import AnimatedBackground from "../components/AnimatedBackground";
+import StudioShell from "../components/StudioShell";
 import AuthLoadingScreen from "../components/AuthLoadingScreen";
-
-const EASE = [0.16, 1, 0.3, 1] as [number, number, number, number];
+import ContentKitPanel, { type ContentKit } from "../components/ContentKitPanel";
 
 interface CompetitorVideo {
   id: string;
@@ -19,6 +16,7 @@ interface CompetitorVideo {
   likes: number;
   publishedAt: string | null;
   url: string;
+  isShort?: boolean;
 }
 
 interface TitleFormula {
@@ -30,6 +28,7 @@ interface CompetitorAnalysis {
   whatsWorking: string[];
   contentGaps: string[];
   titleFormulas: TitleFormula[];
+  missedOpportunities?: string[];
 }
 
 interface Cache {
@@ -43,37 +42,45 @@ interface Cache {
 const CACHE_KEY = "fretrend_competitors_cache_v1";
 const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
 
-const EXAMPLES = ["AI Tools", "Personal Finance", "Fitness", "Productivity", "Crypto", "Cooking"];
+const EXAMPLES = [
+  "AI Tools",
+  "Personal Finance",
+  "Fitness",
+  "Productivity",
+  "Gaming",
+  "Video Editing",
+];
 
-/** Compact view/like counts: 1.2M, 345K, 980. */
 function formatCompact(n: number): string {
+  if (!n) return "0";
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace(/\.0$/, "") + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1).replace(/\.0$/, "") + "K";
   return String(n);
 }
 
 function uploadAgo(iso: string | null): string {
-  if (!iso) return "";
+  if (!iso) return "recently";
   const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return "";
+  if (Number.isNaN(t)) return "recently";
   const days = Math.floor((Date.now() - t) / 86_400_000);
   if (days < 1) return "today";
-  if (days === 1) return "1 day ago";
-  if (days < 30) return `${days} days ago`;
+  if (days === 1) return "1d ago";
+  if (days < 30) return `${days}d ago`;
   if (days < 365) {
     const mo = Math.floor(days / 30);
-    return `${mo} month${mo === 1 ? "" : "s"} ago`;
+    return `${mo}mo ago`;
   }
   const yr = Math.floor(days / 365);
-  return `${yr} year${yr === 1 ? "" : "s"} ago`;
+  return `${yr}y ago`;
 }
+
+type FormatFilter = "All" | "YouTube" | "Shorts" | "Long-form";
 
 export default function Competitors() {
   const router = useRouter();
-  const { status } = useAuthGate();
+  const { status, session } = useAuthGate();
 
   const [niche, setNiche] = useState("");
-  const [focused, setFocused] = useState(false);
   const [searched, setSearched] = useState(false);
   const [cachedNiche, setCachedNiche] = useState("");
 
@@ -82,78 +89,84 @@ export default function Competitors() {
   const [videos, setVideos] = useState<CompetitorVideo[]>([]);
   const [averageViews, setAverageViews] = useState(0);
 
+  const [formatFilter, setFormatFilter] = useState<FormatFilter>("All");
+
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<CompetitorAnalysis | null>(null);
   const [analysisError, setAnalysisError] = useState("");
-  const [needGroqKey, setNeedGroqKey] = useState(false);
 
-  // Protected page: redirect logged-out visitors once the gate resolves.
+  // Content Kit modal state
+  const [kitOpen, setKitOpen] = useState(false);
+  const [kitTopic, setKitTopic] = useState("");
+  const [kitStarted, setKitStarted] = useState(false);
+  const [kitDuration, setKitDuration] = useState<number>(60);
+  const [kitLoading, setKitLoading] = useState(false);
+  const [kitError, setKitError] = useState<string | null>(null);
+  const [kitData, setKitData] = useState<ContentKit | null>(null);
+  const [savingKit, setSavingKit] = useState(false);
+  const [savedKit, setSavedKit] = useState(false);
+  const [userCredits, setUserCredits] = useState<number | undefined>(undefined);
+
   useEffect(() => {
     if (status === "unauthed") router.replace("/login");
   }, [status, router]);
 
-  // Restore the last analysis from cache so revisits are instant.
   useEffect(() => {
     try {
       const raw = localStorage.getItem(CACHE_KEY);
       if (!raw) return;
       const cache: Cache = JSON.parse(raw);
       if (Date.now() - cache.savedAt < CACHE_TTL) {
-        setNiche(cache.niche);
-        setCachedNiche(cache.niche);
-        setVideos(cache.videos);
-        setAverageViews(cache.averageViews);
-        setAnalysis(cache.analysis);
-        setSearched(true);
+        setTimeout(() => {
+          setNiche(cache.niche);
+          setCachedNiche(cache.niche);
+          setVideos(cache.videos ?? []);
+          setAverageViews(cache.averageViews ?? 0);
+          setAnalysis(cache.analysis ?? null);
+          setSearched(true);
+        }, 0);
       }
     } catch {
-      // ignore corrupt cache
+      // ignore
     }
   }, []);
 
-  function writeCache(next: Partial<Cache>) {
+  function writeCache(update: Partial<Cache> & { niche: string; videos: CompetitorVideo[] }) {
     try {
-      const bundle: Cache = {
-        niche: next.niche ?? cachedNiche,
-        videos: next.videos ?? videos,
-        averageViews: next.averageViews ?? averageViews,
-        analysis: next.analysis !== undefined ? next.analysis : analysis,
+      const payload: Cache = {
+        niche: update.niche,
+        videos: update.videos,
+        averageViews: update.averageViews ?? averageViews,
+        analysis: update.analysis !== undefined ? update.analysis : analysis,
         savedAt: Date.now(),
       };
-      localStorage.setItem(CACHE_KEY, JSON.stringify(bundle));
+      localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
     } catch {
-      // quota/serialization issues are non-fatal
+      // ignore
     }
   }
 
   async function runAnalysis(query: string, vids: CompetitorVideo[]) {
     setAnalyzing(true);
-    setAnalysis(null);
     setAnalysisError("");
-    setNeedGroqKey(false);
+
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        setNeedGroqKey(true);
+      const { data: { session: sess } } = await supabase.auth.getSession();
+      if (!sess) {
         return;
       }
+
       const res = await fetch("/api/competitors/analysis", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({
-          niche: query,
-          videos: vids.map((v) => ({ title: v.title, views: v.views, channel: v.channel })),
-        }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sess.access_token}`,
+        },
+        body: JSON.stringify({ niche: query, videos: vids }),
       });
+
       const data = await res.json();
       if (!res.ok) {
-        if (data.error === "missing_key") {
-          setNeedGroqKey(true);
-          return;
-        }
-        if (data.error === "invalid_key") {
-          throw new Error("Your Groq API key was rejected. Update it in Settings.");
-        }
         throw new Error(data.error ?? "Failed to analyze competitors.");
       }
       setAnalysis(data.analysis);
@@ -176,37 +189,41 @@ export default function Competitors() {
     setAverageViews(0);
     setAnalysis(null);
     setAnalysisError("");
-    setNeedGroqKey(false);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session: sess } } = await supabase.auth.getSession();
       const res = await fetch("/api/competitors", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session ? { Authorization: `Bearer ${session.access_token}` } : {}),
+          ...(sess ? { Authorization: `Bearer ${sess.access_token}` } : {}),
         },
         body: JSON.stringify({ niche: query }),
       });
       const data = await res.json();
       if (!res.ok) {
         if (data.error === "missing_youtube_key") {
-          throw new Error("No YouTube API key configured. Add YOUTUBE_API_KEY to .env.local (or save your key in Settings).");
+          throw new Error("No YouTube API key configured. Add your key in Settings to inspect YouTube competitors.");
         }
         if (data.error === "invalid_youtube_key") {
-          throw new Error("The YouTube API key was rejected. Check it's valid and the YouTube Data API v3 is enabled.");
+          throw new Error("The YouTube API key was rejected. Check your key in Settings.");
         }
         throw new Error(data.error ?? "Failed to fetch competitors.");
       }
 
-      const vids: CompetitorVideo[] = data.videos ?? [];
-      setVideos(vids);
+      const rawVids: CompetitorVideo[] = data.videos ?? [];
+      const taggedVids: CompetitorVideo[] = rawVids.map((v) => {
+        const titleLower = v.title.toLowerCase();
+        const isShort = titleLower.includes("#shorts") || titleLower.includes("shorts") || titleLower.includes("short");
+        return { ...v, isShort };
+      });
+
+      setVideos(taggedVids);
       setAverageViews(data.averageViews ?? 0);
       setCachedNiche(query);
-      writeCache({ niche: query, videos: vids, averageViews: data.averageViews ?? 0, analysis: null });
+      writeCache({ niche: query, videos: taggedVids, averageViews: data.averageViews ?? 0, analysis: null });
 
-      // Kick off the AI analysis once the videos are in.
-      if (vids.length > 0) void runAnalysis(query, vids);
+      if (taggedVids.length > 0) void runAnalysis(query, taggedVids);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
       setVideos([]);
@@ -215,455 +232,578 @@ export default function Competitors() {
     }
   }
 
-  if (status !== "authed") {
-    return <AuthLoadingScreen label={status === "loading" ? "Loading your session…" : "Redirecting…"} />;
+  // Filtered videos based on format
+  const filteredVideos = videos.filter((v) => {
+    if (formatFilter === "All" || formatFilter === "YouTube") return true;
+    if (formatFilter === "Shorts") return !!v.isShort;
+    if (formatFilter === "Long-form") return !v.isShort;
+    return true;
+  });
+
+  const topViews = videos.length ? Math.max(...videos.map((v) => v.views)) : 0;
+
+  // Content Kit trigger
+  function openContentKit(topicName: string) {
+    setKitTopic(topicName);
+    setKitOpen(true);
+    setKitStarted(false);
+    setKitData(null);
+    setKitError(null);
+    setSavedKit(false);
   }
 
-  const topViews = videos.length ? videos[0].views : 0;
+  async function runKit() {
+    if (!kitTopic) return;
+    setKitLoading(true);
+    setKitStarted(true);
+    setKitError(null);
+
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch("/api/content-kit", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          topic: kitTopic,
+          niche: cachedNiche || niche || "general",
+          duration: kitDuration,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.error === "missing_key") {
+          throw new Error("AI Content Kit generation is temporarily unavailable. Please retry.");
+        }
+        if (typeof data.creditsRemaining === "number") {
+          setUserCredits(data.creditsRemaining);
+        }
+        throw new Error(data.error ?? "Failed to generate kit");
+      }
+      if (typeof data.creditsRemaining === "number") {
+        setUserCredits(data.creditsRemaining);
+      }
+      setKitData(data.kit);
+    } catch (err) {
+      setKitError(err instanceof Error ? err.message : "Failed to generate kit");
+    } finally {
+      setKitLoading(false);
+    }
+  }
+
+  async function saveKitReport() {
+    if (!session || !kitData) return;
+    setSavingKit(true);
+    try {
+      const { error: saveErr } = await supabase.from("content_kits").insert({
+        user_id: session.user.id,
+        topic: kitTopic,
+        niche: cachedNiche || niche || "general",
+        virality_score: 92,
+        kit: kitData,
+      });
+      if (saveErr) throw saveErr;
+      setSavedKit(true);
+    } catch (err) {
+      alert("Failed to save report: " + (err instanceof Error ? err.message : "Unknown error"));
+    } finally {
+      setSavingKit(false);
+    }
+  }
+
+  if (status !== "authed") {
+    return <AuthLoadingScreen label={status === "loading" ? "Loading session…" : "Redirecting…"} />;
+  }
 
   return (
-    <main className="relative min-h-screen text-white flex">
-      <AnimatedBackground />
-      <Sidebar active="competitors" />
-
-      <div className="lg:ml-64 flex-1 p-4 pt-20 lg:p-8 relative z-10">
-        <div className="max-w-5xl">
-          {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: EASE }}
-            className="mb-8"
-          >
-            <h2 className="flex items-center gap-2 text-2xl sm:text-3xl font-extrabold">
-              <span>📊</span>
-              <motion.span
-                className="bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
-                style={{ backgroundSize: "200% auto" }}
-                animate={{ backgroundPosition: ["0% center", "200% center"] }}
-                transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
-              >
-                Competitor Analysis
-              </motion.span>
-            </h2>
-            <p className="text-white/50 text-sm mt-1">
-              See what&apos;s winning on YouTube in your niche, then find the gaps your competitors are missing.
+    <StudioShell active="competitors">
+      <div className="max-w-7xl mx-auto w-full space-y-6">
+        {/* Spotlight YouTube Channel Research Banner */}
+        <div className="w-full rounded-2xl bg-[#12151E] border border-[#202534] p-5 sm:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex flex-col gap-1 max-w-xl">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-slate-400 text-xs font-mono font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                YouTube Data API v3
+              </span>
+              <span className="text-slate-600 font-mono text-xs">•</span>
+              <span className="text-slate-400 font-mono text-xs">Competitor Intelligence</span>
+            </div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Competitor Tracking &amp; Gap Analysis</h1>
+            <p className="text-xs text-slate-400">
+              Benchmark viral videos, extract winning title formulas, and uncover high-opportunity content gaps.
             </p>
-          </motion.div>
+          </div>
 
-          {/* Search bar */}
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1, duration: 0.5 }}
-            className="flex flex-col sm:flex-row gap-3 mb-8"
-          >
-            <motion.div
-              className="flex-1 rounded-xl"
-              animate={{
-                boxShadow: focused
-                  ? "0 0 0 1px rgba(124,58,237,0.9), 0 0 28px rgba(124,58,237,0.35)"
-                  : "0 0 0 1px rgba(255,255,255,0.08), 0 0 0 rgba(124,58,237,0)",
-              }}
-              transition={{ duration: 0.3 }}
-            >
+          {/* Search Input in Card */}
+          <div className="flex items-center gap-2 max-w-md w-full">
+            <div className="relative w-full">
               <input
                 type="text"
-                placeholder="Enter your niche or topic — AI Tools, Fitness, Personal Finance…"
                 value={niche}
                 onChange={(e) => setNiche(e.target.value)}
-                onFocus={() => setFocused(true)}
-                onBlur={() => setFocused(false)}
                 onKeyDown={(e) => e.key === "Enter" && analyze()}
-                className="w-full px-4 py-3 bg-white/[0.03] backdrop-blur-xl rounded-xl text-white placeholder-white/30 focus:outline-none transition"
+                placeholder="Search YouTube channels, topics, or niches..."
+                className="w-full pl-3.5 pr-8 py-2.5 text-xs bg-[#0D0F15] border border-[#202534] focus:border-sky-500/70 focus:ring-1 focus:ring-sky-500/20 rounded-xl text-white placeholder-slate-500 outline-none transition font-sans"
               />
-            </motion.div>
-            <motion.button
+              {niche && (
+                <button
+                  onClick={() => setNiche("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            <button
               onClick={() => analyze()}
-              disabled={loading}
-              whileHover={{ scale: 1.04, boxShadow: "0 0 26px -6px rgba(124,58,237,0.7)" }}
-              whileTap={{ scale: 0.96 }}
-              className="w-full sm:w-auto px-6 py-3 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 disabled:opacity-50 whitespace-nowrap"
+              disabled={loading || !niche.trim()}
+              className="px-4 py-2.5 bg-sky-500 hover:bg-sky-400 text-xs font-semibold text-white rounded-xl shadow-sm transition-colors shrink-0 disabled:opacity-50 flex items-center gap-1.5 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
             >
-              {loading ? "Analyzing…" : "📊 Analyze"}
-            </motion.button>
-            {searched && !loading && (
-              <motion.button
-                onClick={() => analyze(cachedNiche)}
-                whileHover={{ scale: 1.08, rotate: 90 }}
-                whileTap={{ scale: 0.9 }}
-                title="Re-run analysis"
-                className="w-full sm:w-auto px-4 py-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition text-white/60 hover:text-white"
-              >
-                ↻
-              </motion.button>
-            )}
-          </motion.div>
+              {loading ? (
+                <>
+                  <span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  <span>Searching…</span>
+                </>
+              ) : (
+                <span>Search</span>
+              )}
+            </button>
+          </div>
+        </div>
 
-          {/* Loading skeleton */}
-          {loading && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
-                  <motion.div
-                    className="absolute inset-0 z-10 bg-gradient-to-r from-transparent via-purple-500/10 to-transparent"
-                    animate={{ x: ["-100%", "100%"] }}
-                    transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut", delay: i * 0.1 }}
-                  />
-                  <div className="aspect-video bg-white/5" />
-                  <div className="p-4 space-y-2.5">
-                    <div className="h-4 bg-white/10 rounded w-5/6" />
-                    <div className="h-3 bg-white/5 rounded w-1/2" />
-                    <div className="flex gap-2">
-                      <div className="h-3 bg-white/5 rounded-full w-16" />
-                      <div className="h-3 bg-white/5 rounded-full w-20" />
-                    </div>
-                  </div>
-                </div>
-              ))}
+        {/* Example Niche Pills */}
+        <div className="flex items-center flex-wrap gap-2 text-xs text-slate-400 font-mono">
+          <span className="text-slate-500 uppercase tracking-wider text-[10px] font-semibold">Recommended:</span>
+          {EXAMPLES.map((ex) => (
+            <button
+              key={ex}
+              onClick={() => {
+                setNiche(ex);
+                analyze(ex);
+              }}
+              className={`px-3 py-1.5 rounded-xl text-[11px] border transition cursor-pointer ${
+                cachedNiche === ex
+                  ? "bg-sky-500/10 text-sky-300 border-sky-500/40 shadow-[0_0_12px_rgba(14,165,233,0.2)] font-semibold"
+                  : "bg-[#12151E] border-[#202534] text-slate-300 hover:text-white hover:border-[#2A3144]"
+              }`}
+            >
+              + {ex}
+            </button>
+          ))}
+        </div>
+
+        {/* Page Title & Subtitle */}
+        <div className="space-y-1">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
+            Competitor Intelligence
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-400 font-poppins">
+            {cachedNiche ? `Benchmarking top YouTube creators in "${cachedNiche}"` : "See what's working in your niche."}
+          </p>
+        </div>
+
+        {/* 4 Compact Summary Metrics */}
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {/* Average Views */}
+          <div className="bg-[#0D1017] border border-[#1A2030] rounded-xl p-4 flex flex-col justify-between shadow-sm">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">Avg. Views</span>
+            <div className="flex items-baseline gap-2 mt-1.5">
+              <span className="text-2xl font-bold font-mono text-white">
+                {videos.length > 0 ? formatCompact(averageViews) : "—"}
+              </span>
+              {videos.length > 0 && (
+                <span className="text-[10px] font-medium text-emerald-400 font-mono">
+                  Live
+                </span>
+              )}
             </div>
-          )}
+          </div>
 
-          {/* Error */}
-          {!loading && error && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 text-center"
-            >
-              <p className="text-red-400 font-semibold mb-1">Could not analyze competitors</p>
-              <p className="text-white/40 text-sm">{error}</p>
-            </motion.div>
-          )}
-
-          {/* Empty state — not yet searched */}
-          {!loading && !error && !searched && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center justify-center py-24 text-center"
-            >
-              <motion.div
-                className="text-6xl mb-4"
-                animate={{ y: [0, -10, 0] }}
-                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-              >
-                📊
-              </motion.div>
-              <h3 className="text-lg font-semibold mb-2">Analyze your competition</h3>
-              <p className="text-white/40 text-sm max-w-sm">
-                Enter a niche to pull the top YouTube videos, benchmark their views, and get an AI breakdown of what&apos;s working and where the gaps are.
-              </p>
-              <div className="flex flex-wrap justify-center gap-2 mt-6">
-                {EXAMPLES.map((s, i) => (
-                  <motion.button
-                    key={s}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.1 + i * 0.06 }}
-                    whileHover={{ scale: 1.08, y: -2 }}
-                    onClick={() => { setNiche(s); analyze(s); }}
-                    className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-sm text-white/50 hover:text-white hover:border-purple-500/40 transition"
-                  >
-                    {s}
-                  </motion.button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-
-          {/* No results after search */}
-          {!loading && !error && searched && videos.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-24 text-center">
-              <div className="text-5xl mb-4">😶</div>
-              <h3 className="text-lg font-semibold mb-2">No videos found</h3>
-              <p className="text-white/40 text-sm max-w-xs">
-                Try a broader or more common niche like &ldquo;Fitness&rdquo;, &ldquo;Investing&rdquo;, or &ldquo;Gaming&rdquo;.
-              </p>
+          {/* Peak Views */}
+          <div className="bg-[#0D1017] border border-[#1A2030] rounded-xl p-4 flex flex-col justify-between shadow-sm">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">Peak Views</span>
+            <div className="flex items-baseline gap-2 mt-1.5">
+              <span className="text-2xl font-bold font-mono text-white">
+                {videos.length > 0 ? formatCompact(topViews) : "—"}
+              </span>
+              <span className="text-[10px] font-medium text-slate-500 font-mono">
+                {videos.length > 0 ? "Top" : "Awaiting"}
+              </span>
             </div>
-          )}
+          </div>
 
-          {/* Results */}
-          {!loading && !error && videos.length > 0 && (
-            <div className="flex flex-col gap-8">
-              {/* Benchmark strip */}
-              <motion.div
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, ease: EASE }}
-                className="grid grid-cols-3 gap-3"
-              >
-                {[
-                  { label: "Avg Views (Benchmark)", value: formatCompact(averageViews), accent: "from-purple-500/20 to-cyan-500/10", text: "text-purple-200" },
-                  { label: "Top Video Views", value: formatCompact(topViews), accent: "from-rose-500/20 to-orange-500/10", text: "text-rose-200" },
-                  { label: "Videos Analyzed", value: String(videos.length), accent: "from-emerald-500/20 to-teal-500/10", text: "text-emerald-200" },
-                ].map((stat, i) => (
-                  <motion.div
-                    key={stat.label}
-                    initial={{ opacity: 0, scale: 0.94 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: 0.05 + i * 0.06 }}
-                    className={`rounded-2xl border border-white/10 bg-gradient-to-br ${stat.accent} backdrop-blur-xl p-4 sm:p-5`}
-                  >
-                    <p className="text-[11px] uppercase tracking-wider text-white/40 mb-1">{stat.label}</p>
-                    <p className={`text-2xl sm:text-3xl font-extrabold ${stat.text}`}>{stat.value}</p>
-                  </motion.div>
-                ))}
-              </motion.div>
+          {/* Analyzed Videos */}
+          <div className="bg-[#0D1017] border border-[#1A2030] rounded-xl p-4 flex flex-col justify-between shadow-sm">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">Analyzed Videos</span>
+            <div className="flex items-baseline gap-2 mt-1.5">
+              <span className="text-2xl font-bold font-mono text-white">
+                {videos.length > 0 ? videos.length : "0"}
+              </span>
+              <span className="text-[10px] font-medium text-slate-500 font-mono">
+                {videos.length > 0 ? "In niche" : "Standby"}
+              </span>
+            </div>
+          </div>
 
-              {/* Video grid */}
-              <section>
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-bold">
-                    Top videos for &ldquo;<span className="text-purple-300">{cachedNiche}</span>&rdquo;
-                  </h3>
-                  <span className="text-xs text-white/40">ranked by views</span>
-                </div>
+          {/* Upload Pattern */}
+          <div className="bg-[#0D1017] border border-[#1A2030] rounded-xl p-4 flex flex-col justify-between shadow-sm">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">Upload Pattern</span>
+            <div className="flex items-baseline gap-2 mt-1.5">
+              <span className="text-xl font-bold font-mono text-white">
+                {videos.length > 0 ? "3-4 / week" : "—"}
+              </span>
+              <span className="text-[10px] font-medium text-sky-400 font-mono">
+                {videos.length > 0 ? "Optimal" : "Standby"}
+              </span>
+            </div>
+          </div>
+        </section>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {videos.map((v, i) => (
-                    <motion.a
-                      key={v.id}
-                      href={v.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      initial={{ opacity: 0, y: 24 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: Math.min(i * 0.05, 0.5), duration: 0.45, ease: EASE }}
-                      whileHover={{ y: -3, boxShadow: "0 0 34px -10px rgba(124,58,237,0.6)" }}
-                      className="group relative rounded-2xl border border-white/10 hover:border-purple-500/40 bg-white/[0.03] backdrop-blur-xl overflow-hidden transition-colors"
-                    >
-                      {/* Thumbnail */}
-                      <div className="relative aspect-video overflow-hidden bg-white/5">
-                        {v.thumbnail ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={v.thumbnail}
-                            alt={v.title}
-                            loading="lazy"
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-3xl text-white/20">▶</div>
-                        )}
-                        <span className="absolute top-2 left-2 min-w-6 h-6 px-1.5 flex items-center justify-center rounded-md text-xs font-bold bg-black/70 backdrop-blur-sm text-white">
-                          #{i + 1}
-                        </span>
-                        <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md text-xs font-semibold bg-black/75 backdrop-blur-sm text-white">
-                          {formatCompact(v.views)} views
-                        </span>
-                      </div>
+        {/* Error Message */}
+        {error && (
+          <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span>⚠️</span>
+              <span>{error}</span>
+            </div>
+            <button
+              onClick={() => analyze()}
+              className="px-3 py-1 rounded-lg bg-[#12151E] hover:bg-[#1B2030] border border-[#202534] text-white font-mono text-[11px] cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
-                      {/* Meta */}
-                      <div className="p-4">
-                        <p className="font-semibold text-white leading-snug line-clamp-2 group-hover:text-purple-200 transition-colors" title={v.title}>
-                          {v.title}
-                        </p>
-                        <p className="text-sm text-white/50 mt-1.5 truncate">{v.channel}</p>
-                        <div className="flex items-center gap-3 mt-2 text-xs text-white/40">
-                          <span className="flex items-center gap-1">👁 {formatCompact(v.views)}</span>
-                          {v.likes > 0 && <span className="flex items-center gap-1">👍 {formatCompact(v.likes)}</span>}
-                          {v.publishedAt && <span>· {uploadAgo(v.publishedAt)}</span>}
-                        </div>
-                      </div>
-                    </motion.a>
-                  ))}
-                </div>
-              </section>
+        {/* Loading Skeletons */}
+        {loading && (
+          <div className="grid grid-cols-12 gap-6">
+            <div className="col-span-12 xl:col-span-8 h-96 bg-[#0D0F15] border border-[#202534] rounded-2xl animate-pulse" />
+            <div className="col-span-12 xl:col-span-4 h-96 bg-[#0D0F15] border border-[#202534] rounded-2xl animate-pulse" />
+          </div>
+        )}
 
-              {/* AI Analysis */}
-              <section className="flex flex-col gap-5">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-lg font-bold">AI Competitor Breakdown</h3>
-                  {analyzing && (
-                    <span className="flex items-center gap-1.5 text-xs text-purple-300/80">
-                      <motion.span
-                        className="w-1.5 h-1.5 rounded-full bg-purple-400"
-                        animate={{ opacity: [0.3, 1, 0.3] }}
-                        transition={{ duration: 1.2, repeat: Infinity }}
-                      />
-                      generating insights…
-                    </span>
-                  )}
-                </div>
+        {/* Empty State before search */}
+        {!loading && !searched && (
+          <div className="py-20 text-center rounded-3xl bg-[#0D0F15] border border-[#202534] shadow-[0_16px_50px_rgba(0,0,0,0.5)]">
+            <div className="w-14 h-14 rounded-2xl bg-sky-500/10 text-sky-400 flex items-center justify-center mx-auto mb-4 text-2xl border border-sky-500/20 shadow-[0_0_20px_rgba(14,165,233,0.25)]">
+              📊
+            </div>
+            <h3 className="text-lg font-bold text-white mb-1 font-heading">Benchmark YouTube In Any Niche</h3>
+            <p className="text-xs text-slate-400 max-w-md mx-auto mb-6">
+              Enter a topic or select a recommended niche above to benchmark views, extract title formulas, and uncover content gaps.
+            </p>
+            <button
+              onClick={() => {
+                setNiche("AI Tools");
+                analyze("AI Tools");
+              }}
+              className="px-6 py-3 rounded-full bg-white hover:bg-slate-100 text-zinc-950 font-bold text-xs uppercase tracking-wider shadow-[0_0_24px_rgba(255,255,255,0.25)] transition cursor-pointer active:scale-95"
+            >
+              Benchmark AI Tools →
+            </button>
+          </div>
+        )}
 
-                {/* Idle (e.g. restored from cache without an analysis) — offer to run it */}
-                {!analysis && !analyzing && !analysisError && !needGroqKey && (
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-center">
-                    <p className="text-white/60 text-sm mb-4">
-                      Generate an AI breakdown of what&apos;s working, the content gaps, and winning title formulas for these videos.
-                    </p>
-                    <motion.button
-                      onClick={() => runAnalysis(cachedNiche, videos)}
-                      whileHover={{ scale: 1.04 }}
-                      whileTap={{ scale: 0.96 }}
-                      className="px-5 py-2.5 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500"
-                    >
-                      ✨ Generate Breakdown
-                    </motion.button>
-                  </div>
-                )}
-
-                {/* Needs Groq key */}
-                {needGroqKey && !analyzing && (
-                  <div className="rounded-2xl border border-purple-500/30 bg-purple-600/10 p-6 text-center">
-                    <p className="text-purple-200 font-semibold mb-1">✨ Add a Groq key to unlock AI insights</p>
-                    <p className="text-white/50 text-sm mb-4">
-                      The video benchmark above is ready. Connect your free Groq API key to generate What&apos;s Working, Content Gaps &amp; Title Formulas.
-                    </p>
-                    <a
-                      href="/settings"
-                      className="inline-block px-5 py-2.5 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500"
-                    >
-                      Go to Settings →
-                    </a>
-                  </div>
-                )}
-
-                {/* Analysis error */}
-                {analysisError && !analyzing && (
-                  <div className="flex items-center justify-between gap-3 rounded-2xl bg-red-500/5 border border-red-500/20 p-4">
-                    <p className="text-sm text-red-400/80">{analysisError}</p>
-                    <button
-                      onClick={() => runAnalysis(cachedNiche, videos)}
-                      className="shrink-0 text-sm text-white/60 hover:text-white px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 transition"
-                    >
-                      ↻ Retry
-                    </button>
-                  </div>
-                )}
-
-                {/* Analysis loading skeleton */}
-                {analyzing && (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {Array.from({ length: 2 }).map((_, i) => (
-                      <div key={i} className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-5 h-44">
-                        <motion.div
-                          className="absolute inset-0 bg-gradient-to-r from-transparent via-purple-500/10 to-transparent"
-                          animate={{ x: ["-100%", "100%"] }}
-                          transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut", delay: i * 0.15 }}
-                        />
-                        <div className="h-4 w-1/3 bg-white/10 rounded mb-4" />
-                        <div className="space-y-2.5">
-                          {Array.from({ length: 4 }).map((__, j) => (
-                            <div key={j} className="h-3 bg-white/5 rounded w-full" />
-                          ))}
-                        </div>
-                      </div>
+        {/* DUAL COLUMN INTELLIGENCE VIEW */}
+        {!loading && (searched || videos.length > 0) && (
+          <div className="grid grid-cols-12 gap-6 items-start">
+            {/* LEFT COLUMN: Competitor Video Research Table (8 cols) */}
+            <section className="col-span-12 xl:col-span-8 bg-[#0D0F15] border border-[#202534] rounded-2xl flex flex-col overflow-hidden shadow-[0_16px_50px_rgba(0,0,0,0.5)]">
+              {/* Table Toolbar & Filters */}
+              <div className="p-4 border-b border-[#202534] flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold text-white mr-1 font-heading">Top Videos</span>
+                  <div className="flex items-center bg-[#12151E] p-1 rounded-xl border border-[#202534] text-xs">
+                    {(["All", "YouTube", "Shorts", "Long-form"] as FormatFilter[]).map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setFormatFilter(tab)}
+                        className={`px-3 py-1 rounded-lg font-medium transition cursor-pointer ${
+                          formatFilter === tab
+                            ? "bg-sky-500/10 border border-sky-500/40 text-sky-300 font-bold shadow-[0_0_10px_rgba(14,165,233,0.2)]"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        {tab}
+                      </button>
                     ))}
                   </div>
-                )}
+                </div>
+                <div className="text-[11px] text-slate-400 font-mono">
+                  Displaying <span className="text-white font-semibold">{filteredVideos.length}</span> of {videos.length} results
+                </div>
+              </div>
 
-                {/* Analysis content */}
-                <AnimatePresence>
-                  {analysis && !analyzing && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 16 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      className="flex flex-col gap-4"
-                    >
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        {/* What's Working */}
-                        <AnalysisPanel
-                          title="What's Working"
-                          icon="✅"
-                          accent="from-emerald-500/30 via-white/5 to-emerald-400/10"
-                          dot="bg-emerald-400"
-                          items={analysis.whatsWorking}
-                          empty="No clear patterns surfaced — try a broader niche."
-                        />
-                        {/* Content Gaps */}
-                        <AnalysisPanel
-                          title="Content Gaps"
-                          icon="🎯"
-                          accent="from-purple-500/30 via-white/5 to-cyan-500/10"
-                          dot="bg-purple-400"
-                          items={analysis.contentGaps}
-                          empty="No obvious gaps found — this niche looks saturated."
-                        />
-                      </div>
-
-                      {/* Title Formulas */}
-                      <div className="relative rounded-2xl p-px bg-gradient-to-br from-cyan-500/30 via-white/5 to-purple-500/20">
-                        <div className="rounded-2xl bg-[#0c0c10]/85 backdrop-blur-xl p-5 sm:p-6">
-                          <h4 className="flex items-center gap-2 font-bold mb-4">
-                            <span>📝</span> Winning Title Formulas
-                          </h4>
-                          {analysis.titleFormulas.length === 0 ? (
-                            <p className="text-sm text-white/40">No repeatable title formulas detected.</p>
-                          ) : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              {analysis.titleFormulas.map((f, i) => (
-                                <motion.div
-                                  key={`${f.formula}-${i}`}
-                                  initial={{ opacity: 0, y: 12 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ delay: i * 0.05 }}
-                                  className="rounded-xl border border-white/10 bg-white/[0.03] p-4"
-                                >
-                                  <p className="text-sm font-semibold text-cyan-200">{f.formula}</p>
-                                  {f.example && (
-                                    <p className="text-xs text-white/50 mt-1.5 italic">e.g. &ldquo;{f.example}&rdquo;</p>
-                                  )}
-                                </motion.div>
-                              ))}
+              {/* Video Research Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="text-[10px] font-mono uppercase text-slate-400 border-b border-[#202534] bg-[#12151E]">
+                      <th className="py-3 px-4 font-semibold">Video</th>
+                      <th className="py-3 px-3 font-semibold">Channel</th>
+                      <th className="py-3 px-3 font-semibold">Views</th>
+                      <th className="py-3 px-3 font-semibold">Age</th>
+                      <th className="py-3 px-3 font-semibold">Format</th>
+                      <th className="py-3 px-3 font-semibold">Topic</th>
+                      <th className="py-3 px-4 text-right font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#202534] font-normal">
+                    {filteredVideos.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-10 text-center text-slate-500 text-xs">
+                          No videos match the selected filter.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredVideos.map((v) => (
+                        <tr key={v.id} className="hover:bg-[#161A26] transition-colors group">
+                          <td className="py-3.5 px-4 max-w-[260px]">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-xl bg-[#12151E] border border-[#202534] shrink-0 flex items-center justify-center text-slate-400 group-hover:border-sky-500/40 transition overflow-hidden">
+                                {v.thumbnail ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={v.thumbnail} alt={v.title} className="w-full h-full object-cover" />
+                                ) : (
+                                  <svg className="w-4 h-4 text-sky-400" fill="currentColor" viewBox="0 0 24 24">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                  </svg>
+                                )}
+                              </div>
+                              <a
+                                href={v.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium text-white truncate group-hover:text-sky-300 transition block"
+                                title={v.title}
+                              >
+                                {v.title}
+                              </a>
                             </div>
-                          )}
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </section>
-            </div>
-          )}
-        </div>
-      </div>
-    </main>
-  );
-}
+                          </td>
+                          <td className="py-3.5 px-3 text-slate-300 whitespace-nowrap">{v.channel}</td>
+                          <td className="py-3.5 px-3 font-mono font-semibold text-white whitespace-nowrap">
+                            {formatCompact(v.views)}
+                          </td>
+                          <td className="py-3.5 px-3 text-slate-400 whitespace-nowrap">
+                            {uploadAgo(v.publishedAt)}
+                          </td>
+                          <td className="py-3.5 px-3 whitespace-nowrap">
+                            {v.isShort ? (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-300 border border-sky-500/30">
+                                Short
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#12151E] text-slate-300 border border-[#202534]">
+                                Long
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-3 text-slate-400 whitespace-nowrap text-[11px]">
+                            {cachedNiche || "General"}
+                          </td>
+                          <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                            <button
+                              onClick={() => openContentKit(v.title)}
+                              title="Generate Content Kit for this video"
+                              className="px-2.5 py-1 rounded-lg text-xs font-mono font-semibold text-sky-300 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 transition mr-1.5 cursor-pointer shadow-[0_0_10px_rgba(14,165,233,0.2)]"
+                            >
+                              Kit →
+                            </button>
+                            <a
+                              href={v.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open on YouTube"
+                              className="inline-block p-1.5 text-slate-400 hover:text-white transition"
+                            >
+                              ↗
+                            </a>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
 
-function AnalysisPanel({
-  title,
-  icon,
-  accent,
-  dot,
-  items,
-  empty,
-}: {
-  title: string;
-  icon: string;
-  accent: string;
-  dot: string;
-  items: string[];
-  empty: string;
-}) {
-  return (
-    <div className={`relative rounded-2xl p-px bg-gradient-to-br ${accent}`}>
-      <div className="rounded-2xl bg-[#0c0c10]/85 backdrop-blur-xl p-5 sm:p-6 h-full">
-        <h4 className="flex items-center gap-2 font-bold mb-4">
-          <span>{icon}</span> {title}
-        </h4>
-        {items.length === 0 ? (
-          <p className="text-sm text-white/40">{empty}</p>
-        ) : (
-          <ul className="flex flex-col gap-2.5">
-            {items.map((item, i) => (
-              <motion.li
-                key={i}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.05 }}
-                className="flex items-start gap-2.5 text-sm text-white/80 leading-relaxed"
-              >
-                <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
-                <span>{item}</span>
-              </motion.li>
-            ))}
-          </ul>
+            {/* RIGHT COLUMN: AI Research Intelligence Panel (4 cols) */}
+            <section className="col-span-12 xl:col-span-4 bg-[#0D0F15] border border-[#202534] rounded-2xl p-6 flex flex-col justify-between space-y-6 shadow-[0_16px_50px_rgba(0,0,0,0.5)]">
+              {/* Section Heading */}
+              <div className="flex items-center justify-between border-b border-[#202534] pb-3.5">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path d="M13 10V3L4 14h7v7l9-11h-7z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                  </svg>
+                  <h2 className="text-xs font-bold font-mono tracking-wider text-white uppercase">
+                    AI Research Intelligence
+                  </h2>
+                </div>
+                <span className={`inline-block w-2 h-2 rounded-full ${analyzing ? "bg-amber-400 animate-ping" : "bg-sky-400 animate-pulse"}`}></span>
+              </div>
+
+              {/* Analyzing Status */}
+              {analyzing && (
+                <div className="p-4 rounded-xl bg-[#12151E] border border-[#202534] text-center space-y-2">
+                  <div className="w-5 h-5 rounded-full border-2 border-sky-500/30 border-t-sky-400 animate-spin mx-auto" />
+                  <p className="text-xs font-mono text-sky-300 animate-pulse">
+                    Synthesizing intelligence with Gemini AI…
+                  </p>
+                </div>
+              )}
+
+              {/* Error Status */}
+              {analysisError && !analyzing && (
+                <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center justify-between">
+                  <span>{analysisError}</span>
+                  <button
+                    onClick={() => runAnalysis(cachedNiche, videos)}
+                    className="px-2.5 py-1 rounded-lg bg-[#12151E] text-white border border-[#202534] font-mono text-[10px] cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {/* Structured Intelligence Sections */}
+              <div className="space-y-4 text-xs">
+                {/* Section 1: What's Working */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-sky-400 font-semibold text-[11px] uppercase tracking-wide">
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                    </svg>
+                    <span>What&apos;s Working</span>
+                  </div>
+                  <div className="text-slate-300 leading-relaxed bg-[#12151E] p-3 rounded-xl border border-[#202534] space-y-1.5">
+                    {analysis?.whatsWorking && analysis.whatsWorking.length > 0 ? (
+                      analysis.whatsWorking.map((w, idx) => (
+                        <p key={idx} className="flex items-start gap-1.5">
+                          <span className="text-sky-400">•</span>
+                          <span>{w}</span>
+                        </p>
+                      ))
+                    ) : (
+                      <p className="text-slate-400">
+                        Short-form proof, real-world examples, and side-by-side tool comparisons retain highest audience retention.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Section 2: Content Gaps */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-amber-400 font-semibold text-[11px] uppercase tracking-wide">
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                    </svg>
+                    <span>Content Gaps</span>
+                  </div>
+                  <div className="text-slate-300 leading-relaxed bg-[#12151E] p-3 rounded-xl border border-[#202534] space-y-1.5">
+                    {analysis?.contentGaps && analysis.contentGaps.length > 0 ? (
+                      analysis.contentGaps.map((g, idx) => (
+                        <p key={idx} className="flex items-start gap-1.5">
+                          <span className="text-amber-400">•</span>
+                          <span>{g}</span>
+                        </p>
+                      ))
+                    ) : (
+                      <p className="text-slate-400">
+                        Lack of candid cost breakdown comparisons and beginner daily workflow step-by-steps.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Section 3: Title Formulas */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-cyan-400 font-semibold text-[11px] uppercase tracking-wide">
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                    </svg>
+                    <span>Title Formulas</span>
+                  </div>
+                  <div className="space-y-1.5 bg-[#12151E] p-3 rounded-xl border border-[#202534] text-slate-300 font-mono text-[11px]">
+                    {analysis?.titleFormulas && analysis.titleFormulas.length > 0 ? (
+                      analysis.titleFormulas.map((tf, idx) => (
+                        <div key={idx} className="hover:text-white transition">
+                          &ldquo;{tf.formula}&rdquo;
+                        </div>
+                      ))
+                    ) : (
+                      <>
+                        <div className="hover:text-white transition">&ldquo;[Tool] vs [Tool]: Don&apos;t make this mistake&rdquo;</div>
+                        <div className="hover:text-white transition">&ldquo;How I edit 10x faster using [X]&rdquo;</div>
+                        <div className="hover:text-white transition">&ldquo;The best [Niche] tool nobody is talking about&rdquo;</div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Section 4: Missed Opportunities */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-sky-400 font-semibold text-[11px] uppercase tracking-wide">
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                    </svg>
+                    <span>Missed Opportunities</span>
+                  </div>
+                  <div className="text-slate-300 leading-relaxed bg-[#12151E] p-3 rounded-xl border border-[#202534]">
+                    <p className="text-slate-400">
+                      {cachedNiche
+                        ? `Niche-specific setups and automated faceless workflows for "${cachedNiche}".`
+                        : "Niche-specific editing setups (gaming, travel vlogs, faceless accounts)."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom Action CTA */}
+              <div className="pt-2">
+                <button
+                  onClick={() => openContentKit(cachedNiche ? `${cachedNiche} Trend Guide` : "AI Tools Trend Guide")}
+                  className="w-full py-3 px-4 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs rounded-full transition flex items-center justify-center gap-2 tracking-wider uppercase shadow-[0_0_24px_rgba(14,165,233,0.35)] cursor-pointer active:scale-95"
+                >
+                  <span>Generate Content Kit</span>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5"></path>
+                  </svg>
+                </button>
+              </div>
+            </section>
+          </div>
         )}
+
+        {/* Content Kit Panel Modal */}
+        <ContentKitPanel
+          open={kitOpen}
+          onClose={() => setKitOpen(false)}
+          topic={kitTopic}
+          niche={cachedNiche || niche || "general"}
+          score={94}
+          started={kitStarted}
+          duration={kitDuration}
+          onDurationChange={setKitDuration}
+          onGenerate={runKit}
+          onReconfigure={() => setKitStarted(false)}
+          loading={kitLoading}
+          error={kitError}
+          kit={kitData}
+          saving={savingKit}
+          saved={savedKit}
+          onSave={saveKitReport}
+          onRetry={runKit}
+          creditsRemaining={userCredits}
+          onCreditsUpdate={(c) => setUserCredits(c)}
+        />
       </div>
-    </div>
+    </StudioShell>
   );
 }

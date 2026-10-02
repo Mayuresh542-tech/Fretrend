@@ -278,7 +278,8 @@ export async function POST(req: NextRequest) {
         youtube: ytResult.status === "fulfilled" ? ytResult.value.length : 0,
       },
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

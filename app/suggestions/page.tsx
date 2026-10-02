@@ -1,9 +1,9 @@
 "use client";
+
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabase";
-import Sidebar from "../components/Sidebar";
-import AnimatedBackground from "../components/AnimatedBackground";
+import StudioShell from "../components/StudioShell";
 
 const TYPES = ["New Feature", "Bug Report", "Improvement", "Other"] as const;
 type SuggestionType = (typeof TYPES)[number];
@@ -27,7 +27,7 @@ export default function Suggestions() {
   async function submit() {
     setError("");
     if (!message.trim()) {
-      setError("Please enter your suggestion before submitting.");
+      setError("Please enter your suggestion or feedback before submitting.");
       return;
     }
 
@@ -41,11 +41,7 @@ export default function Suggestions() {
     setSubmitting(false);
 
     if (insertError) {
-      setError(
-        insertError.message.includes("suggestions")
-          ? "Suggestions table missing. Run migration 0003_suggestions.sql in Supabase."
-          : insertError.message,
-      );
+      setError(insertError.message);
       return;
     }
 
@@ -62,170 +58,144 @@ export default function Suggestions() {
   }
 
   return (
-    <main className="relative min-h-screen text-white flex">
-      <AnimatedBackground />
-      <Sidebar active="suggestions" />
-
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.5 }}
-        className="lg:ml-64 flex-1 p-4 pt-20 lg:p-8 relative z-10"
-      >
-        <div className="max-w-2xl mx-auto">
-          {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            className="mb-8"
-          >
-            <motion.h2
-              className="text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
-              style={{ backgroundSize: "200% auto" }}
-              animate={{ backgroundPosition: ["0% center", "200% center"] }}
-              transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
-            >
-              Suggestions &amp; Feedback
-            </motion.h2>
-            <p className="text-white/50 text-sm mt-1">
-              Help shape Fretrend — every idea, bug, and nudge is read 💜
+    <StudioShell active="suggestions">
+      <div className="max-w-3xl mx-auto w-full space-y-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-[#1A2030]">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+              <span className="text-[10px] font-mono uppercase font-bold tracking-wider text-sky-400">
+                CREATOR INITIATIVES
+              </span>
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+              Suggestions &amp; Community Radar
+            </h1>
+            <p className="text-xs text-slate-400 mt-1 max-w-xl">
+              Help shape future Veelox releases. Request new platform adapters, recommend trend feeds, or submit product improvements.
             </p>
-          </motion.div>
-
-          <AnimatePresence mode="wait">
-            {submitted ? (
-              /* Thank-you state */
-              <motion.div
-                key="thanks"
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                className="relative rounded-2xl p-px bg-gradient-to-br from-purple-500/40 via-white/5 to-cyan-500/30"
-              >
-                <div className="rounded-2xl bg-[#0c0c10]/85 backdrop-blur-xl p-10 text-center">
-                  <motion.div
-                    className="text-6xl mb-4"
-                    initial={{ scale: 0, rotate: -30 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    transition={{ type: "spring", stiffness: 260, damping: 16, delay: 0.1 }}
-                  >
-                    🎉
-                  </motion.div>
-                  <h3 className="text-xl font-bold mb-2">Thank you!</h3>
-                  <p className="text-white/60 text-sm max-w-sm mx-auto mb-6">
-                    Your {TYPE_ICON[type]} {type.toLowerCase()} has been received. We genuinely read
-                    every submission — thanks for helping make Fretrend better.
-                  </p>
-                  <button
-                    onClick={reset}
-                    className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-purple-600 to-cyan-500"
-                  >
-                    Submit another
-                  </button>
-                </div>
-              </motion.div>
-            ) : (
-              /* Form */
-              <motion.div
-                key="form"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ delay: 0.05, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                className="relative rounded-2xl p-px bg-gradient-to-br from-purple-500/30 via-white/5 to-cyan-500/25"
-              >
-                <div className="rounded-2xl bg-[#0c0c10]/85 backdrop-blur-xl p-6 flex flex-col gap-5">
-                  {/* Name + Email */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm text-white/60 mb-1.5">
-                        Name <span className="text-white/30">(optional)</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="Your name"
-                        className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-white/30 focus:outline-none focus:border-purple-500 transition"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-white/60 mb-1.5">
-                        Email <span className="text-white/30">(optional)</span>
-                      </label>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="you@example.com"
-                        className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-white/30 focus:outline-none focus:border-purple-500 transition"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Type */}
-                  <div>
-                    <label className="block text-sm text-white/60 mb-1.5">Suggestion type</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {TYPES.map((t) => {
-                        const active = t === type;
-                        return (
-                          <motion.button
-                            key={t}
-                            type="button"
-                            onClick={() => setType(t)}
-                            whileTap={{ scale: 0.97 }}
-                            className={`px-3 py-2.5 rounded-xl text-xs font-medium border transition-colors ${
-                              active
-                                ? "border-purple-500/50 bg-gradient-to-r from-purple-600/25 to-cyan-500/15 text-white"
-                                : "border-white/10 bg-white/[0.03] text-white/50 hover:text-white hover:bg-white/[0.06]"
-                            }`}
-                          >
-                            <span className="block text-base mb-0.5">{TYPE_ICON[t]}</span>
-                            {t}
-                          </motion.button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Message */}
-                  <div>
-                    <label className="block text-sm text-white/60 mb-1.5">
-                      Your suggestion <span className="text-purple-400">*</span>
-                    </label>
-                    <textarea
-                      value={message}
-                      onChange={(e) => setMessage(e.target.value)}
-                      rows={6}
-                      placeholder="Tell us what's on your mind — a feature you'd love, a bug you hit, anything…"
-                      className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-white/30 focus:outline-none focus:border-purple-500 transition resize-none"
-                    />
-                  </div>
-
-                  {error && (
-                    <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3">
-                      <p className="text-red-400 text-sm">{error}</p>
-                    </div>
-                  )}
-
-                  <motion.button
-                    onClick={submit}
-                    disabled={submitting}
-                    whileHover={{ scale: submitting ? 1 : 1.01, boxShadow: "0 0 26px -8px rgba(124,58,237,0.7)" }}
-                    whileTap={{ scale: submitting ? 1 : 0.99 }}
-                    className="w-full py-3 rounded-xl font-semibold bg-gradient-to-r from-purple-600 to-cyan-500 disabled:opacity-50 transition"
-                  >
-                    {submitting ? "Sending…" : "🚀 Submit Suggestion"}
-                  </motion.button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          </div>
         </div>
-      </motion.div>
-    </main>
+
+        <AnimatePresence mode="wait">
+          {submitted ? (
+            /* Success State */
+            <motion.div
+              key="thanks"
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="p-8 sm:p-10 rounded-2xl bg-[#0D1017] border border-sky-500/30 text-center shadow-sm"
+            >
+              <span className="text-4xl block mb-3">🎉</span>
+              <h2 className="text-lg font-bold text-white mb-1.5">Thank you for your feedback!</h2>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto mb-5 leading-relaxed">
+                Your {TYPE_ICON[type]} {type.toLowerCase()} submission has been logged into our queue. We review every note directly.
+              </p>
+              <button
+                onClick={reset}
+                className="px-5 py-2.5 rounded-lg text-xs sm:text-sm font-medium bg-sky-500 hover:bg-sky-400 text-white shadow-sm transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+              >
+                Submit another idea
+              </button>
+            </motion.div>
+          ) : (
+            /* Form State */
+            <div className="p-6 sm:p-8 rounded-2xl bg-[#0D1017] border border-[#1A2030] space-y-5 shadow-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-1.5 font-medium">
+                    Your Name <span className="text-slate-500 font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g. Liam Parker"
+                    className="w-full px-3.5 py-2.5 bg-[#11141E] border border-[#202738] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus-visible:ring-1 focus-visible:ring-sky-500 transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-1.5 font-medium">
+                    Your Email <span className="text-slate-500 font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="liam@creator.com"
+                    className="w-full px-3.5 py-2.5 bg-[#11141E] border border-[#202738] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus-visible:ring-1 focus-visible:ring-sky-500 transition-colors font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Suggestion Type */}
+              <div>
+                <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-2 font-medium">
+                  Category
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {TYPES.map((t) => {
+                    const active = t === type;
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setType(t)}
+                        className={`p-3 rounded-xl text-xs font-medium border transition-colors text-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                          active
+                            ? "bg-sky-500/15 border-sky-500/40 text-sky-200 shadow-sm"
+                            : "bg-[#11141E] border-[#202738] text-slate-400 hover:text-white hover:border-slate-600"
+                        }`}
+                      >
+                        <span className="block text-base mb-1">{TYPE_ICON[t]}</span>
+                        <span>{t}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Message */}
+              <div>
+                <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-1.5 font-medium">
+                  Message / Details <span className="text-rose-400">*</span>
+                </label>
+                <textarea
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  rows={5}
+                  placeholder="Describe your feature concept, source suggestion, or bug encounter in detail…"
+                  className="w-full p-3.5 bg-[#11141E] border border-[#202738] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus-visible:ring-1 focus-visible:ring-sky-500 transition-colors resize-none leading-relaxed font-sans"
+                />
+              </div>
+
+              {error && (
+                <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/25 text-rose-300 text-xs font-mono">
+                  {error}
+                </div>
+              )}
+
+              <button
+                onClick={submit}
+                disabled={submitting}
+                className="w-full py-2.5 rounded-lg font-medium text-xs sm:text-sm bg-sky-500 hover:bg-sky-400 text-white shadow-sm transition-colors disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+              >
+                {submitting ? (
+                  <>
+                    <span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                    <span>Submitting feedback…</span>
+                  </>
+                ) : (
+                  <span>Submit Suggestion 🚀</span>
+                )}
+              </button>
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
+    </StudioShell>
   );
 }
